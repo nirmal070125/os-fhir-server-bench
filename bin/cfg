@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Read a dotted key from bench.config.yaml.
+#   bin/cfg dataset.seed            -> 1234
+#   bin/cfg azure.vm_sizes.sut      -> Standard_D8s_v5
+# Override the config path with BENCH_CONFIG=/path/to/file.
+set -euo pipefail
+
+key="${1:?usage: cfg <dotted.key>}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cfg="${BENCH_CONFIG:-$here/../bench.config.yaml}"
+
+if ! command -v yq >/dev/null 2>&1; then
+  echo "cfg: 'yq' not found (mikefarah/yq). Install it or run on a provisioned VM." >&2
+  exit 1
+fi
+
+val="$(yq -r ".${key}" "$cfg")"
+if [[ "$val" == "null" ]]; then
+  echo "cfg: key '$key' not found in $cfg" >&2
+  exit 1
+fi
+printf '%s\n' "$val"

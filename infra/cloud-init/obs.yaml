@@ -1,0 +1,19 @@
+#cloud-config
+# Observability node: runs Prometheus + Grafana (via Docker) to collect k6 +
+# node/cAdvisor/db-exporter metrics and serve the "where we stand" dashboards.
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker ${admin_user}
+  - curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/local/bin/yq
+  - chmod +x /usr/local/bin/yq
+  - mkdir -p /opt/bench/observability
+  - chown -R ${admin_user}:${admin_user} /opt/bench
+  # The Prometheus + Grafana docker-compose stack (reporting/) is rsync'd up and
+  # started by the orchestrator (plan step 7), once it knows the node IPs.

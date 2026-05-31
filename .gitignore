@@ -1,0 +1,18 @@
+# Secrets
+.env
+
+# Terraform — state and local cache are machine-specific.
+# NOTE: .terraform.lock.hcl IS committed (it pins provider versions = reproducibility).
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfplan
+infra/crash.log
+
+# Generated dataset + snapshots (regenerated deterministically from seed)
+dataset/output/
+dataset/snapshots/
+
+# Run artifacts (uploaded to Blob; not tracked)
+results/
+*.log

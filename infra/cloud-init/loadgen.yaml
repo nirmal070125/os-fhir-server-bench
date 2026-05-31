@@ -1,0 +1,23 @@
+#cloud-config
+# Load-generator node: runs k6 (headless), and generates the Synthea dataset
+# (needs a JDK). Must out-class the SUT so it is never the bottleneck.
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - unzip
+  - openjdk-17-jre-headless   # Synthea requires Java 17+
+
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker ${admin_user}
+  - curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/local/bin/yq
+  - chmod +x /usr/local/bin/yq
+  # k6 (pinned) for open-model load generation
+  - curl -fsSL https://github.com/grafana/k6/releases/download/v0.52.0/k6-v0.52.0-linux-amd64.tar.gz -o /tmp/k6.tgz
+  - tar -xzf /tmp/k6.tgz -C /tmp
+  - install -m0755 /tmp/k6-v0.52.0-linux-amd64/k6 /usr/local/bin/k6
+  - mkdir -p /opt/bench/dataset
+  - chown -R ${admin_user}:${admin_user} /opt/bench

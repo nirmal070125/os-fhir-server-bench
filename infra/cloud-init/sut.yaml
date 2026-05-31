@@ -1,0 +1,18 @@
+#cloud-config
+# SUT node: runs the FHIR server container + its DB container under fixed limits,
+# plus node_exporter/cAdvisor (launched later by the orchestrator) for metrics.
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - postgresql-client-16   # for pg snapshot/restore of Postgres-backed servers
+
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker ${admin_user}
+  - curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o /usr/local/bin/yq
+  - chmod +x /usr/local/bin/yq
+  - mkdir -p /opt/bench/dataset /opt/bench/snapshots
+  - chown -R ${admin_user}:${admin_user} /opt/bench

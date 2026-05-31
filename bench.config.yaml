@@ -1,0 +1,80 @@
+# os-fhir-server-bench — THE single source of truth.
+#
+# Everything tunable lives here. SECRETS DO NOT: Azure auth comes from ARM_*
+# environment variables (see .env.example), never this file.
+#
+# Terraform reads this file directly via yamldecode(); shell scripts read it
+# via bin/cfg. Edit this + .env, then run ./reproduce.sh.
+
+azure:
+  location: eastus                       # reference region; override freely
+  resource_group: fhir-bench-rg
+  vm_sizes:
+    sut: Standard_D8s_v5                  # System-Under-Test host (8 vCPU / 32 GB)
+    loadgen: Standard_D8s_v5             # load generator — must out-class the SUT
+    obs: Standard_D4s_v5                 # Prometheus + Grafana (4 vCPU / 16 GB)
+  spot_enabled: true                     # loadgen + obs on Spot (cheap); SUT always regular
+  auto_shutdown:                         # backstop against forgotten, billing VMs
+    enabled: true
+    time: "2000"                         # HHmm, local to `timezone`
+    timezone: "UTC"
+  admin_username: benchadmin
+  ssh_public_key_path: ~/.ssh/id_rsa.pub
+  # SECURITY: lock SSH to your IP. Set to "<your.ip>/32"; leaving 0.0.0.0/0 opens SSH to the world.
+  allowed_ssh_cidr: 0.0.0.0/0
+
+# Identical container resource envelope applied to EVERY server under test —
+# this is what makes the comparison fair.
+limits:
+  sut_cpus: 4
+  sut_mem: 8g
+  db_cpus: 4
+  db_mem: 8g
+
+dataset:
+  synthea_version: "3.3.0"               # pinned for reproducibility
+  seed: 1234                             # fixed RNG seed → byte-identical bundles
+  reference_date: "20240101"             # pins Synthea's "now" so ages are deterministic
+  size: medium                           # small | medium | large (headline runs use large)
+  populations:                           # number of Synthea patients per tier
+    small: 1000
+    medium: 10000
+    large: 100000
+
+# Pinned, enable/disable per server. Build/iterate with only fhir-server-go on;
+# flip others on as they're added (plan steps 9-11).
+servers:
+  fhir-server-go:
+    enabled: true
+    ref: feat/fhir-server-go-transaction-bundle   # needs the system-level bundle endpoint
+    image: ghcr.io/nirmal070125/fhir-server-go:0.1.0
+    base_path: /fhir/r4
+    port: 9090
+  hapi:
+    enabled: false
+    image: hapiproject/hapi:v7.4.0
+  microsoft:
+    enabled: false
+  ibm:
+    enabled: false
+  medplum:
+    enabled: false
+  blaze:
+    enabled: false
+
+run:
+  warmup_s: 90                           # discarded — warms JIT/page cache/pools
+  measure_s: 600                         # the only data that counts
+  cooldown_s: 60
+  repetitions: 3                         # report median + spread
+  scenarios: [read-mix, ingest, saturation]
+
+# Pass/fail line for "max sustainable throughput"; full curves are published too.
+slo:
+  p99_ms: 500
+  max_error_rate: 0.001
+
+reporting:
+  tsdb: prometheus
+  artifact_store: azure_blob             # raw k6 JSON + generated reports
+  blob_container: bench-results
