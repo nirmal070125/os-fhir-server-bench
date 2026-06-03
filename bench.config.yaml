@@ -82,6 +82,27 @@ run:
   repetitions: 3                         # report median + spread
   scenarios: [read-mix, ingest, saturation]
 
+# Per-scenario load shape (open model — arrival rate, NOT VU count, drives load so
+# coordinated omission can't hide). Rates are requests/sec the loadgen TRIES to issue;
+# the SUT either keeps up (steady latency) or queues (latency climbs) — that's the signal.
+# preallocated_vus/max_vus only cap how many in-flight requests k6 may hold open.
+workload:
+  read-mix:                # steady, read-dominated real-world traffic at a fixed rate
+    rate: 200              # req/s (constant arrival)
+    preallocated_vus: 100
+    max_vus: 800
+  ingest:                  # sustained writes — POST transaction bundles (PR #165 endpoint)
+    rate: 50               # bundles/s
+    preallocated_vus: 50
+    max_vus: 400
+  saturation:              # ramp rate up until the SLO breaks → max sustainable throughput
+    start_rate: 50         # req/s
+    step_rate: 50          # +50 req/s each step
+    step_duration: 30s
+    max_rate: 2000
+    preallocated_vus: 100
+    max_vus: 2000
+
 # Pass/fail line for "max sustainable throughput"; full curves are published too.
 slo:
   p99_ms: 500
