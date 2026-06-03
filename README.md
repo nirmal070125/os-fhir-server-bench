@@ -89,6 +89,17 @@ dataset size + seed, which servers are enabled, run timings, SLOs). Secrets live
 
 ## Status
 
-Scaffolding + Azure infra + dataset module are in place. Server profiles beyond
-`fhir-server-go`, the k6 scenarios, the orchestrator, and reporting are being added per the
-project plan.
+The full pipeline is implemented and CI-validated: infra (Terraform), dataset
+(Synthea + per-engine snapshot/restore), k6 scenarios (open model), orchestrator
+(restore → warm-up → measure ×N → run manifest), reporting (report generator +
+Prometheus/Grafana + Blob upload), and GitHub Actions (validate / smoke / azure-run).
+
+Server profiles:
+
+| Server | Status |
+|---|---|
+| fhir-server-go, HAPI, Blaze | ✅ boot-verified end-to-end |
+| Microsoft, Medplum, IBM | ⚠️ scaffolded — finalize per each `servers/<name>/README.md` (shared blocker: an optional auth header for seed/scenarios) |
+
+Next milestones: **Phase-0 Medium run** (fhir-server-go only) on Azure, then the
+**Large (100k) all-six headline run** once the three scaffolded profiles are finalized.
