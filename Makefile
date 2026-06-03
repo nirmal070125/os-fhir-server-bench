@@ -20,10 +20,10 @@ infra-down: ## Destroy all Azure resources (run this when done!)
 	cd $(INFRA) && terraform destroy -auto-approve
 
 seed: ## Generate Synthea dataset, load into each enabled server, snapshot
-	@echo "[seed] implemented in plan step 6 (orchestrator). Dataset scripts live in dataset/."
+	@orchestrator/orchestrate.sh seed
 
 run: ## Execute the benchmark matrix (servers x scenarios x reps)
-	@echo "[run] implemented in plan steps 5-6 (k6 scenarios + orchestrator)."
+	@orchestrator/orchestrate.sh run
 
 report: ## Generate comparison report + upload artifacts to Blob
 	@echo "[report] implemented in plan step 7 (reporting)."

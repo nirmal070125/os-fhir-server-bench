@@ -6,7 +6,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-[[ -f .env ]] || ./render-env.sh
+./render-env.sh          # always regenerate from bench.config.yaml (the source of truth)
 set -a; . ./.env; set +a
 
 echo "==> docker compose up -d"
