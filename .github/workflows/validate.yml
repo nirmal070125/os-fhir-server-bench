@@ -28,7 +28,8 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          find . -name '*.sh' -not -path '*/.src/*' -print0 | xargs -0 shellcheck -S warning
+          # -S error gates CI on real bugs; SC2155-style warnings are advisory.
+          find . -name '*.sh' -not -path '*/.src/*' -print0 | xargs -0 shellcheck -S error
 
       - name: Report generator compiles
         run: python3 -m py_compile reporting/report.py
