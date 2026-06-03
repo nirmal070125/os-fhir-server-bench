@@ -1,0 +1,40 @@
+# Microsoft FHIR Server (comparator) — SQL Server backed. SCAFFOLDED, not yet
+# boot-verified (SQL Server image is ~2 GB and the schema-init takes minutes; finalize
+# on first real run — see README). Security disabled for an open, apples-to-apples API.
+name: bench-microsoft
+
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Bench_passw0rd!}
+      MSSQL_PID: Developer
+    ports:
+      - "${DB_PORT}:1433"
+    volumes:
+      - mssqldata:/var/opt/mssql
+      - ./backup:/var/opt/mssql/backup        # shared so snapshot_mssql.sh can reach .bak files
+    deploy:
+      resources:
+        limits: { cpus: "${DB_CPUS}", memory: "${DB_MEM}" }
+
+  server:
+    image: mcr.microsoft.com/healthcareapis/r4-fhir-server:latest
+    ports:
+      - "${HOST_PORT}:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      FHIRServer__Security__Enabled: "false"
+      SqlServer__ConnectionString: "Server=tcp:sql,1433;Initial Catalog=FHIR;User ID=sa;Password=${MSSQL_SA_PASSWORD:-Bench_passw0rd!};MultipleActiveResultSets=False;Encrypt=False;TrustServerCertificate=True"
+      SqlServer__AllowDatabaseCreation: "true"
+      SqlServer__Initialize: "true"
+      DataStore: SqlServer
+    depends_on: [sql]
+    restart: on-failure
+    deploy:
+      resources:
+        limits: { cpus: "${SUT_CPUS}", memory: "${SUT_MEM}" }
+
+volumes:
+  mssqldata:

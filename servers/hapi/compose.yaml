@@ -1,0 +1,49 @@
+# HAPI FHIR JPA Server (comparator). Postgres-backed, fixed CPU/mem envelope.
+# Values come from the process env (exported by up.sh from bench.config.yaml).
+name: bench-hapi
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: hapi
+      POSTGRES_USER: hapi
+      POSTGRES_PASSWORD: hapi
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hapi -d hapi"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits: { cpus: "${DB_CPUS}", memory: "${DB_MEM}" }
+
+  server:
+    image: hapiproject/hapi:v7.4.0       # mirrors bench.config.yaml servers.hapi.image
+    ports:
+      - "${HOST_PORT}:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/hapi
+      SPRING_DATASOURCE_USERNAME: hapi
+      SPRING_DATASOURCE_PASSWORD: hapi
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      # The image's baked application.yaml sets the dialect as a MAP key
+      # (spring.jpa.properties.hibernate.dialect = an H2 dialect). Plain env vars
+      # can't override a map key, so we override via SPRING_APPLICATION_JSON (high
+      # precedence, binds nested keys). Without this, Hibernate emits generic `clob`
+      # DDL that Postgres rejects and the schema is left half-created.
+      SPRING_APPLICATION_JSON: '{"spring.jpa.properties.hibernate.dialect":"ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect"}'
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    deploy:
+      resources:
+        limits: { cpus: "${SUT_CPUS}", memory: "${SUT_MEM}" }
+
+volumes:
+  pgdata:

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Image-based server: "build" just prefetches the pinned images.
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$HERE"
+. "$HERE/../_lib/lib.sh"
+export_limits; export_ports hapi
+docker compose pull

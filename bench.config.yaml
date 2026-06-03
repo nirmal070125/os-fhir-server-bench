@@ -63,17 +63,40 @@ servers:
     # Flip these on to measure the cost of IG validation (set the same on comparators too).
     ig_packages: ""
     validate_on_write: false
-  hapi:
+  hapi:                                    # HAPI FHIR JPA (Postgres) — boot-verified
     enabled: false
     image: hapiproject/hapi:v7.4.0
-  microsoft:
+    base_path: /fhir
+    port: 8080
+    db_port: 5532                          # host port for snapshot/restore (PG*)
+    health_path: /fhir/metadata
+  microsoft:                               # Microsoft FHIR Server (SQL Server) — scaffolded
     enabled: false
-  ibm:
+    image: mcr.microsoft.com/healthcareapis/r4-fhir-server:latest
+    base_path: ""
+    port: 8081
+    db_port: 1433                          # SQL Server
+    health_path: /health/check
+  ibm:                                     # IBM/LinuxForHealth FHIR (HTTPS+auth) — scaffolded
     enabled: false
-  medplum:
+    image: ghcr.io/linuxforhealth/fhir-server:latest
+    base_path: /fhir-server/api/v4
+    port: 9443
+    db_port: 5632
+    health_path: /fhir-server/api/v4/$healthcheck
+  medplum:                                 # Medplum (Postgres+Redis, auth required) — scaffolded
     enabled: false
-  blaze:
+    image: medplum/medplum-server:3.2.7
+    base_path: /fhir/R4
+    port: 8103
+    db_port: 5732
+    health_path: /healthcheck
+  blaze:                                   # Blaze (embedded RocksDB) — boot-verified
     enabled: false
+    image: samply/blaze:0.30.0
+    base_path: /fhir
+    port: 8082
+    health_path: /health
 
 run:
   warmup_s: 90                           # discarded — warms JIT/page cache/pools

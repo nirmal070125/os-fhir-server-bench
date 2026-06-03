@@ -40,18 +40,43 @@ SNAP_DIR="$ROOT/dataset/snapshots"
 profile_dir() { echo "$ROOT/servers/$1"; }
 server_engine() { yq -r '.engine' "$(profile_dir "$1")/manifest.yaml"; }
 server_base_url() { echo "http://${SUT_API_HOST}:$(cfg "servers.$1.port")$(cfg "servers.$1.base_path")"; }
+server_health_url() { echo "http://${SUT_API_HOST}:$(cfg "servers.$1.port")$(cfg "servers.$1.health_path")"; }
+wait_ready() { # <url>
+  local url="$1" deadline=$((SECONDS + 300))
+  until curl -fsS -o /dev/null "$url"; do
+    (( SECONDS >= deadline )) && { echo "ERROR: not ready after 300s: $url" >&2; return 1; }
+    sleep 3
+  done
+}
 snapshot_path() { echo "$SNAP_DIR/$1-$SIZE.dump"; }
 
 # Export the DB connection for the engine's snapshot/restore scripts.
 set_db_env() {
-  local server="$1" engine; engine="$(server_engine "$server")"
+  local server="$1" engine mf; engine="$(server_engine "$server")"
+  mf="$(profile_dir "$server")/manifest.yaml"
   case "$engine" in
     postgres)
+      # creds come from the server's manifest (each server uses its own db/user)
       export PGHOST="$SUT_DB_HOST"
       export PGPORT="$(cfg "servers.$server.db_port")"
-      export PGUSER=fhir PGPASSWORD=fhir PGDATABASE=fhirdb
+      export PGUSER="$(yq -r '.dataset.pg.user' "$mf")"
+      export PGPASSWORD="$(yq -r '.dataset.pg.password' "$mf")"
+      export PGDATABASE="$(yq -r '.dataset.pg.database' "$mf")"
       ;;
-    *) echo "ERROR: engine '$engine' not yet supported by the orchestrator (added in plan steps 10-11)" >&2; exit 1 ;;
+    rocksdb)
+      # Blaze: filesystem snapshot of the data volume; restore stops/starts the container.
+      export BLAZE_VOLUME="$(yq -r '.dataset.volume' "$mf")"
+      export BLAZE_CONTAINER="$(yq -r '.dataset.container' "$mf")"
+      ;;
+    mssql)
+      export MSSQL_HOST="$SUT_DB_HOST"
+      export MSSQL_PORT="$(cfg "servers.$server.db_port")"
+      export MSSQL_SA_PASSWORD="$(yq -r '.dataset.mssql.sa_password' "$mf")"
+      export MSSQL_DATABASE="$(yq -r '.dataset.mssql.database' "$mf")"
+      export MSSQL_CONTAINER="bench-${server}-sql-1"
+      export MSSQL_BACKUP_DIR="$(profile_dir "$server")/backup"
+      ;;
+    *) echo "ERROR: engine '$engine' not supported by the orchestrator" >&2; exit 1 ;;
   esac
 }
 
@@ -88,6 +113,7 @@ run_rep() {
   set_db_env "$server"
   log "  rep $rep: restore -> warm-up ${WARMUP_S}s (discard) -> measure ${MEASURE_S}s (capture)"
   "$ROOT/dataset/restore_${engine}.sh" "$snap" >/dev/null
+  wait_ready "$(server_health_url "$server")"   # rocksdb restart needs this; no-op once up
   CAPTURE=0 "$ROOT/scenarios/run.sh" "$scenario" "$base_url" "${WARMUP_S}s"
   CAPTURE=1 OUTDIR="$outdir" "$ROOT/scenarios/run.sh" "$scenario" "$base_url" "${MEASURE_S}s"
   [[ "$COOLDOWN_S" -gt 0 ]] && sleep "$COOLDOWN_S" || true

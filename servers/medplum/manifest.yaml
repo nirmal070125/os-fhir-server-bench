@@ -1,0 +1,14 @@
+# Uniform server contract. STATUS: scaffolded (not yet boot-verified).
+# Engine is Postgres, but seeding/scenarios need an auth token (see README).
+name: medplum
+engine: postgres
+status: scaffolded
+lifecycle: { build: ./build.sh, up: ./up.sh, down: ./down.sh }
+endpoints:
+  base_path_key: servers.medplum.base_path     # /fhir/R4
+  port_key: servers.medplum.port               # 8103
+  health_path_key: servers.medplum.health_path # /healthcheck
+dataset:
+  snapshot: ../../dataset/snapshot_postgres.sh
+  restore: ../../dataset/restore_postgres.sh
+  pg: { host: localhost, port_key: servers.medplum.db_port, user: medplum, password: medplum, database: medplum }

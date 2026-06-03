@@ -1,0 +1,20 @@
+# Uniform server contract (see servers/fhir-server-go/manifest.yaml).
+name: hapi
+engine: postgres
+lifecycle:
+  build: ./build.sh
+  up: ./up.sh
+  down: ./down.sh
+endpoints:
+  base_path_key: servers.hapi.base_path     # /fhir
+  port_key: servers.hapi.port               # 8080
+  health_path_key: servers.hapi.health_path # /fhir/metadata
+dataset:
+  snapshot: ../../dataset/snapshot_postgres.sh
+  restore: ../../dataset/restore_postgres.sh
+  pg:
+    host: localhost
+    port_key: servers.hapi.db_port
+    user: hapi
+    password: hapi
+    database: hapi

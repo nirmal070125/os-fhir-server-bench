@@ -1,0 +1,18 @@
+# Uniform server contract. Blaze stores in embedded RocksDB, so snapshot/restore
+# is a filesystem copy of the data volume (the server is briefly stopped for a
+# consistent copy/swap).
+name: blaze
+engine: rocksdb
+lifecycle:
+  build: ./build.sh
+  up: ./up.sh
+  down: ./down.sh
+endpoints:
+  base_path_key: servers.blaze.base_path     # /fhir
+  port_key: servers.blaze.port               # 8080 (host 8082)
+  health_path_key: servers.blaze.health_path # /health
+dataset:
+  snapshot: ../../dataset/snapshot_rocksdb.sh
+  restore: ../../dataset/restore_rocksdb.sh
+  volume: bench-blaze_blazedata     # docker volume holding /app/data
+  container: bench-blaze-server-1   # stopped briefly during snapshot/restore

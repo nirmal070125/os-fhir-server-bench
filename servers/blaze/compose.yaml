@@ -1,0 +1,22 @@
+# Blaze FHIR Server (comparator). Single container, embedded RocksDB — no separate
+# DB. Same CPU/mem envelope as every other SUT (applied to the one container).
+name: bench-blaze
+
+services:
+  server:
+    image: samply/blaze:0.30.0          # mirrors bench.config.yaml servers.blaze.image
+    ports:
+      - "${HOST_PORT}:8080"
+    environment:
+      BASE_URL: http://localhost:${HOST_PORT}
+      JAVA_TOOL_OPTIONS: "-Xmx${BLAZE_HEAP:-4g}"
+      STORAGE: standalone               # persistent RocksDB at /app/data
+    volumes:
+      - blazedata:/app/data             # snapshot/restore target (rocksdb engine)
+    restart: on-failure
+    deploy:
+      resources:
+        limits: { cpus: "${SUT_CPUS}", memory: "${SUT_MEM}" }
+
+volumes:
+  blazedata:

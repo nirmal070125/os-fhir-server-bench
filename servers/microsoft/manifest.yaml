@@ -1,0 +1,16 @@
+# Uniform server contract. STATUS: scaffolded (not yet boot-verified).
+name: microsoft
+engine: mssql
+status: scaffolded
+lifecycle: { build: ./build.sh, up: ./up.sh, down: ./down.sh }
+endpoints:
+  base_path_key: servers.microsoft.base_path     # "" (FHIR at root)
+  port_key: servers.microsoft.port               # 8080 (host 8081)
+  health_path_key: servers.microsoft.health_path # /health/check
+dataset:
+  snapshot: ../../dataset/snapshot_mssql.sh
+  restore: ../../dataset/restore_mssql.sh
+  mssql:
+    database: FHIR
+    sa_password: Bench_passw0rd!        # matches compose default; override via MSSQL_SA_PASSWORD
+    backup_dir: ./backup                # shared volume path for .bak files

@@ -1,0 +1,21 @@
+# Uniform server contract. STATUS: scaffolded (not yet boot-verified).
+# Default boot is embedded Derby; representative runs use Postgres after the
+# fhir-persistence-schema bootstrap (see README). HTTPS + basic auth — seed/scenarios
+# need -k and an Authorization header (same hook as Medplum).
+name: ibm
+engine: postgres
+status: scaffolded
+lifecycle: { build: ./build.sh, up: ./up.sh, down: ./down.sh }
+endpoints:
+  base_path_key: servers.ibm.base_path     # /fhir-server/api/v4
+  port_key: servers.ibm.port               # 9443 (HTTPS)
+  health_path_key: servers.ibm.health_path # /fhir-server/api/v4/$healthcheck
+auth:
+  scheme: basic
+  user: fhiruser
+  password: change-password
+  tls: self-signed   # clients need -k / insecure TLS
+dataset:
+  snapshot: ../../dataset/snapshot_postgres.sh
+  restore: ../../dataset/restore_postgres.sh
+  pg: { host: localhost, port_key: servers.ibm.db_port, user: fhirserver, password: change-password, database: fhirdb }

@@ -1,0 +1,39 @@
+# IBM / LinuxForHealth FHIR Server (comparator). SCAFFOLDED, not yet boot-verified.
+# Liberty server, HTTPS on 9443, basic auth (fhiruser/change-password). Default
+# datastore is embedded Derby — fine to stand up, but for a representative perf run
+# it should be pointed at Postgres via the fhir-persistence-schema bootstrap (see
+# README). Engine left as Postgres in the manifest with that bootstrap as the gate.
+name: bench-ibm
+
+services:
+  server:
+    image: ghcr.io/linuxforhealth/fhir-server:latest   # mirrors bench.config.yaml
+    ports:
+      - "${HOST_PORT}:9443"
+    environment:
+      BOOTSTRAP_DB: "true"        # initialize the default (Derby) schema on first boot
+    restart: on-failure
+    deploy:
+      resources:
+        limits: { cpus: "${SUT_CPUS}", memory: "${SUT_MEM}" }
+
+  # A Postgres for the representative configuration (requires the schema-tool
+  # bootstrap + a datasource config drop-in; see README). Left here disabled-by-wiring
+  # so the move from Derby -> Postgres is a documented next step, not a rewrite.
+  db:
+    image: postgres:16-alpine
+    profiles: ["postgres"]        # only starts with: docker compose --profile postgres up
+    environment:
+      POSTGRES_DB: fhirdb
+      POSTGRES_USER: fhirserver
+      POSTGRES_PASSWORD: change-password
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits: { cpus: "${DB_CPUS}", memory: "${DB_MEM}" }
+
+volumes:
+  pgdata:
