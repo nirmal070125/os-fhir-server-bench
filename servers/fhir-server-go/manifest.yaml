@@ -1,0 +1,31 @@
+# Uniform server contract consumed by the orchestrator (plan step 6).
+# Every server profile exposes the SAME shape so the run driver stays generic:
+# build -> up -> wait(health) -> snapshot once -> {restore -> measure} xN -> down.
+# Runtime values (ports, creds) live in the generated .env; this file is the
+# stable, declarative description.
+name: fhir-server-go
+engine: postgres
+
+# Lifecycle scripts (run from this directory).
+lifecycle:
+  build: ./build.sh
+  up: ./up.sh
+  down: ./down.sh
+
+# How the orchestrator reaches the FHIR API and judges readiness.
+endpoints:
+  base_path_key: servers.fhir-server-go.base_path     # /fhir/r4
+  port_key: servers.fhir-server-go.port               # 9090
+  health_path_key: servers.fhir-server-go.health_path # /health/ready
+
+# Same logical dataset, native engine: Postgres snapshot/restore before each run.
+dataset:
+  snapshot: ../../dataset/snapshot_postgres.sh
+  restore: ../../dataset/restore_postgres.sh
+  # PG* connection for the scripts (host side). Values from .env / bench.config.yaml:
+  pg:
+    host: localhost
+    port_key: servers.fhir-server-go.db_port          # 5432
+    user: fhir
+    password: fhir
+    database: fhirdb

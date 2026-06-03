@@ -46,10 +46,23 @@ dataset:
 servers:
   fhir-server-go:
     enabled: true
-    ref: feat/fhir-server-go-transaction-bundle   # needs the system-level bundle endpoint
-    image: ghcr.io/nirmal070125/fhir-server-go:0.1.0
+    # Built from source at a pinned commit so the SUT is exactly reproducible.
+    # This commit = latest fhir-server-go on wso2:main (PR #165 transaction bundles,
+    # already merged) PLUS the still-open PR #167 (standard FHIR operations:
+    # $validate/$meta/$convert/$lastn/$document). The branch contains all of main + PR #167.
+    repo: https://github.com/nirmal070125/open-healthcare-prebuilt-services.git
+    ref: fhir-server-go/operations
+    commit: 3159ac6b260c7af42190a1f3382810ee5203f366
+    context_subdir: miscellaneous/fhir-server-go   # build context inside the repo
+    db_image: postgres:16-alpine                   # native engine for this server
     base_path: /fhir/r4
     port: 9090
+    db_port: 5432                                  # host port for snapshot/restore (PG*)
+    health_path: /health/ready
+    # Baseline = apples-to-apples core CRUD/search, no profile-validation overhead.
+    # Flip these on to measure the cost of IG validation (set the same on comparators too).
+    ig_packages: ""
+    validate_on_write: false
   hapi:
     enabled: false
     image: hapiproject/hapi:v7.4.0

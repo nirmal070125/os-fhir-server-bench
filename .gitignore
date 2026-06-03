@@ -1,6 +1,10 @@
 # Secrets
 .env
 
+# Per-server generated build context + rendered env (regenerated from bench.config.yaml)
+servers/**/.src/
+servers/**/.env
+
 # Terraform — state and local cache are machine-specific.
 # NOTE: .terraform.lock.hcl IS committed (it pins provider versions = reproducibility).
 infra/.terraform/

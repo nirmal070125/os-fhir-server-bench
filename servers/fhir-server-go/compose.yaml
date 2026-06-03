@@ -1,0 +1,66 @@
+# Benchmark profile for fhir-server-go — the System Under Test.
+#
+# Built from source at a PINNED COMMIT (bench.config.yaml servers.fhir-server-go.commit)
+# so the binary is exactly reproducible. All values come from .env, which render-env.sh
+# generates from bench.config.yaml — nothing tunable is hard-coded here.
+#
+#   ./build.sh   # clone+checkout pinned source, docker build
+#   ./up.sh      # start db+server, wait for /health/ready
+#   ./down.sh    # stop (add -v to wipe the data volume)
+#
+# deploy.resources.limits is honored by `docker compose up` (Compose v2) — this is what
+# pins every server to the identical CPU/memory envelope from limits.* in the config.
+name: bench-fhir-server-go
+
+services:
+  db:
+    image: ${FSG_DB_IMAGE}
+    environment:
+      POSTGRES_DB: ${FSG_DB_NAME}
+      POSTGRES_USER: ${FSG_DB_USER}
+      POSTGRES_PASSWORD: ${FSG_DB_PASSWORD}
+    ports:
+      - "${FSG_DB_PORT}:5432"   # exposed so snapshot/restore_postgres.sh can reach it via PG*
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FSG_DB_USER} -d ${FSG_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "${DB_CPUS}"
+          memory: ${DB_MEM}
+
+  server:
+    build:
+      context: ${FSG_BUILD_CONTEXT}
+      dockerfile: Dockerfile
+    image: bench/fhir-server-go:${FSG_COMMIT}
+    ports:
+      - "${FSG_PORT}:9090"
+    environment:
+      DATABASE_URL: postgres://${FSG_DB_USER}:${FSG_DB_PASSWORD}@db:5432/${FSG_DB_NAME}?sslmode=disable
+      SERVER_PORT: "9090"
+      BASE_URL: ${FSG_BASE_URL}
+      LOG_LEVEL: ${FSG_LOG_LEVEL}
+      FHIR_VALIDATE_ON_WRITE: "${FSG_VALIDATE_ON_WRITE}"
+      IG_PACKAGES: "${FSG_IG_PACKAGES}"
+      IG_CACHE_DIR: /data/fhir-ig-cache
+    volumes:
+      - igcache:/data/fhir-ig-cache
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: "${SUT_CPUS}"
+          memory: ${SUT_MEM}
+
+volumes:
+  pgdata:
+  igcache:
