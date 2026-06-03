@@ -1,0 +1,64 @@
+name: smoke
+
+# Self-contained end-to-end smoke of the WHOLE pipeline on the GitHub runner — no
+# Azure, no cost. Builds fhir-server-go from source, seeds a little data, runs the
+# orchestrator (short durations) for read-mix + ingest, and generates the report.
+# Exercises exactly the scripts a real run uses. Manual + weekly.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling (yq, k6, postgres client)
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          curl -fsSL https://github.com/grafana/k6/releases/download/v0.52.0/k6-v0.52.0-linux-amd64.tar.gz \
+            | tar xz && sudo mv k6-v0.52.0-linux-amd64/k6 /usr/local/bin/
+          sudo apt-get update -qq && sudo apt-get install -y postgresql-client-16
+          k6 version
+
+      - name: Build + start fhir-server-go
+        run: |
+          servers/fhir-server-go/build.sh
+          servers/fhir-server-go/up.sh
+
+      - name: Seed a little data + snapshot
+        run: |
+          BASE=http://localhost:9090/fhir/r4
+          for i in $(seq 1 200); do
+            curl -fsS -o /dev/null -X POST "$BASE/Patient" \
+              -H 'Content-Type: application/fhir+json' \
+              --data "{\"resourceType\":\"Patient\",\"name\":[{\"family\":\"Smoke$i\"}]}"
+          done
+          export PGHOST=localhost PGPORT=5432 PGUSER=fhir PGPASSWORD=fhir PGDATABASE=fhirdb
+          mkdir -p dataset/snapshots
+          dataset/snapshot_postgres.sh dataset/snapshots/fhir-server-go-medium.dump
+
+      - name: Orchestrate (read-mix + ingest, 1 rep, short)
+        run: |
+          export PGHOST=localhost PGPORT=5432 PGUSER=fhir PGPASSWORD=fhir PGDATABASE=fhirdb
+          SKIP_BUILD=1 KEEP_UP=1 REPS=1 WARMUP_S=5 MEASURE_S=15 COOLDOWN_S=0 \
+          SCENARIOS="read-mix ingest" POOL_SIZE=200 \
+            orchestrator/orchestrate.sh run
+
+      - name: Generate report
+        run: python3 reporting/report.py
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-results
+          path: results/
+
+      - name: Teardown
+        if: always()
+        run: servers/fhir-server-go/down.sh -v || true

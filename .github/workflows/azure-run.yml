@@ -1,0 +1,50 @@
+name: azure-run
+
+# The real headline run on Azure: provision -> seed -> run matrix -> report ->
+# publish to Blob -> teardown, via ./reproduce.sh. Manual only (it spends money).
+# Requires repo secrets:
+#   ARM_SUBSCRIPTION_ID, ARM_TENANT_ID, ARM_CLIENT_ID, ARM_CLIENT_SECRET
+#   BENCH_STORAGE_ACCOUNT, BENCH_STORAGE_KEY (optional; else managed identity)
+# Set dataset.size / enabled servers in bench.config.yaml before dispatching.
+on:
+  workflow_dispatch:
+    inputs:
+      keep_infra:
+        description: "Leave Azure VMs up after the run (debug)"
+        type: boolean
+        default: false
+
+concurrency: azure-run   # never two paid runs at once
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: azure   # add required reviewers here to gate spend
+    env:
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      BENCH_STORAGE_ACCOUNT: ${{ secrets.BENCH_STORAGE_ACCOUNT }}
+      BENCH_STORAGE_KEY: ${{ secrets.BENCH_STORAGE_KEY }}
+      KEEP_INFRA: ${{ inputs.keep_infra && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Install yq + az
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          az version >/dev/null 2>&1 || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (service principal)
+        run: az login --service-principal -u "$ARM_CLIENT_ID" -p "$ARM_CLIENT_SECRET" --tenant "$ARM_TENANT_ID" >/dev/null
+      - name: reproduce.sh (provision -> seed -> run -> report -> teardown)
+        run: ./reproduce.sh
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-run-report
+          path: results/
+          if-no-files-found: ignore

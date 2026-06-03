@@ -1,0 +1,60 @@
+name: validate
+
+# Cheap, cloud-free checks on every push/PR: syntax + config validation for all the
+# scripts, k6 scenarios, compose files, and the report generator.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq (mikefarah)
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Shell syntax (bash -n)
+        run: |
+          find . -name '*.sh' -not -path '*/.src/*' -print0 | xargs -0 -n1 bash -n
+          echo "all shell scripts parse"
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          find . -name '*.sh' -not -path '*/.src/*' -print0 | xargs -0 shellcheck -S warning
+
+      - name: Report generator compiles
+        run: python3 -m py_compile reporting/report.py
+
+      - name: k6 scenarios parse (node --check)
+        run: |
+          for f in scenarios/*.js scenarios/lib/*.js; do
+            cp "$f" "/tmp/$(basename "$f").mjs"
+            node --check "/tmp/$(basename "$f").mjs"
+          done
+          echo "all k6 scripts parse"
+
+      - name: Dashboard JSON is valid
+        run: python3 -c "import json,sys; json.load(open('reporting/observability/grafana/dashboards/fhir-bench.json'))"
+
+      - name: docker compose config (all profiles + observability)
+        run: |
+          export SUT_CPUS=4 SUT_MEM=8g DB_CPUS=4 DB_MEM=8g HOST_PORT=8080 DB_PORT=5432
+          # comparator profiles read ports/limits from the environment
+          for s in hapi blaze microsoft medplum ibm; do
+            docker compose -f "servers/$s/compose.yaml" config -q
+          done
+          # fhir-server-go reads a rendered .env
+          servers/fhir-server-go/render-env.sh
+          docker compose -f servers/fhir-server-go/compose.yaml \
+            --env-file servers/fhir-server-go/.env config -q
+          docker compose -f reporting/observability/docker-compose.yml config -q
+          docker compose -f reporting/observability/sut-exporters.yml config -q
+          echo "all compose files valid"
