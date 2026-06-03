@@ -29,6 +29,17 @@ plus those commits, so we benchmark exactly what ships once #167 lands. Bump the
   so the comparison is apples-to-apples core CRUD/search. Flip both on in the config to
   measure IG-validation cost (and set the equivalent on the comparators).
 
+## Known limit found by the harness
+
+The server hardcodes `WriteTimeout: 60s` (`cmd/server/main.go`) — in Go that clock
+spans the whole handler execution, so a very large transaction bundle (Synthea emits
+up to ~40 MB patients) that takes >60s under CPU contention gets its connection cut
+**after the DB commit**: the client sees a transport error but the data is in.
+Seeding surfaces this at `SEED_CONCURRENCY=8` on 4 CPUs. Fix in flight: make the
+server's HTTP timeouts env-configurable upstream, then bump the pin and set a
+generous write timeout here. Until then, lower `SEED_CONCURRENCY` if you see
+`CLIENT-ERR` on big bundles (and never blind-retry a transaction POST — verify first).
+
 ## Usage
 
 ```bash

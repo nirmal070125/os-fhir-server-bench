@@ -22,6 +22,16 @@ export const JSON_HEADERS = {
   Accept: 'application/fhir+json',
 };
 
+// Optional auth for servers that require it (Medplum, IBM). Same scripts, same
+// path — open servers just leave AUTH_HEADER unset. Format: "Header-Name: value",
+// e.g. AUTH_HEADER='Authorization: Bearer X' or 'Authorization: Basic Y'.
+// (Self-signed TLS: use k6's native K6_INSECURE_SKIP_TLS_VERIFY=true.)
+if (__ENV.AUTH_HEADER) {
+  const i = __ENV.AUTH_HEADER.indexOf(':');
+  if (i < 1) throw new Error("AUTH_HEADER must look like 'Authorization: Bearer …'");
+  JSON_HEADERS[__ENV.AUTH_HEADER.slice(0, i).trim()] = __ENV.AUTH_HEADER.slice(i + 1).trim();
+}
+
 // ---- custom metrics -------------------------------------------------------
 // Tag every request with op=<name> so reporting can break latency down by
 // operation; also a single business-level error rate across the scenario.

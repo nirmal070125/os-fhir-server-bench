@@ -20,3 +20,6 @@ dataset/snapshots/
 # Run artifacts (uploaded to Blob; not tracked)
 results/
 *.log
+
+# Synthea jar (174MB — generate.sh downloads the pinned version)
+dataset/*.jar
