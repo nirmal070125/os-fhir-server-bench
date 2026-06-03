@@ -1,0 +1,44 @@
+# Observability stack for the obs VM: Prometheus (k6 remote-write target + server
+# resource scrape) and Grafana (pre-provisioned). cAdvisor + node-exporter run on
+# the SUT host so server-side CPU/mem is captured alongside client-side k6 latency.
+#
+#   on the obs VM:   docker compose -f reporting/observability/docker-compose.yml up -d
+#   Grafana:         http://<obs-ip>:3000  (admin / admin — change on first login)
+#   k6 -> Prometheus: set K6_PROMETHEUS_RW_SERVER_URL=http://<obs-ip>:9090/api/v1/write
+#
+# Images pinned for reproducibility.
+name: bench-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-remote-write-receiver   # accept k6 experimental-prometheus-rw
+      - --enable-feature=native-histograms   # k6 sends native histograms
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+volumes:
+  promdata:
+  grafanadata:

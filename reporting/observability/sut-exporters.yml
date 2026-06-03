@@ -1,0 +1,30 @@
+# Resource exporters that run ON THE SUT host so Prometheus (on the obs VM) can
+# scrape server-side CPU/mem next to the client-side k6 latency.
+#   on the SUT VM:  docker compose -f reporting/observability/sut-exporters.yml up -d
+# Then point prometheus.yml's SUT_HOST at this host's private IP.
+name: bench-sut-exporters
+
+services:
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    ports:
+      - "8081:8080"   # 8080 may collide with a server; expose cAdvisor on 8081
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices: [/dev/kmsg]
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    ports:
+      - "9100:9100"
+    command:
+      - --path.rootfs=/host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped

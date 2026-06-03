@@ -1,0 +1,63 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "title": "FHIR Bench — live run",
+  "uid": "fhir-bench",
+  "tags": ["fhir", "k6", "bench"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "5s",
+  "templating": {
+    "list": [
+      {
+        "name": "scenario",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(k6_http_reqs_total, scenario)",
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Latency (client-side, k6)",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(k6_http_req_duration[1m])) by (le)) * 1000", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(k6_http_req_duration[1m])) by (le)) * 1000", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(k6_http_req_duration[1m])) by (le)) * 1000", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "Throughput (req/s) & error rate",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(k6_http_reqs_total[1m]))", "legendFormat": "req/s" },
+        { "expr": "sum(rate(k6_http_req_failed_total[1m])) / clamp_min(sum(rate(k6_http_reqs_total[1m])), 1)", "legendFormat": "error fraction" }
+      ]
+    },
+    {
+      "title": "SUT CPU (cAdvisor, container)",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [
+        { "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*fhir.*|.*server.*\"}[1m])) by (name)", "legendFormat": "{{name}}" }
+      ]
+    },
+    {
+      "title": "SUT memory (cAdvisor, container)",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        { "expr": "sum(container_memory_working_set_bytes{name=~\".*fhir.*|.*server.*|.*db.*\"}) by (name)", "legendFormat": "{{name}}" }
+      ]
+    }
+  ]
+}

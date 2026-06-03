@@ -1,0 +1,25 @@
+# Prometheus config for the bench obs VM.
+# - k6 pushes client-side metrics in via remote-write (--web.enable-remote-write-receiver).
+# - We scrape cAdvisor + node-exporter on the SUT host for server-side CPU/mem, so a
+#   latency number can always be read next to the resource pressure that produced it.
+#
+# SUT_HOST is templated by cloud-init / the operator (default: the SUT private IP).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Server-side resource usage on the System Under Test.
+  # Run cAdvisor (:8081, see sut-exporters.yml) and node-exporter (:9100) on the SUT host.
+  - job_name: sut-cadvisor
+    static_configs:
+      - targets: ["${SUT_HOST:-sut}:8081"]
+        labels: { host: sut }
+  - job_name: sut-node
+    static_configs:
+      - targets: ["${SUT_HOST:-sut}:9100"]
+        labels: { host: sut }

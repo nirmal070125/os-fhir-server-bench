@@ -26,7 +26,8 @@ run: ## Execute the benchmark matrix (servers x scenarios x reps)
 	@orchestrator/orchestrate.sh run
 
 report: ## Generate comparison report + upload artifacts to Blob
-	@echo "[report] implemented in plan step 7 (reporting)."
+	@python3 reporting/report.py
+	@if [[ -n "$${BENCH_STORAGE_ACCOUNT:-}" ]]; then reporting/upload.sh; else echo "[report] BENCH_STORAGE_ACCOUNT unset — skipping Blob upload (report.md/csv are in results/)"; fi
 
 clean: ## Remove local generated dataset/snapshots/results
 	rm -rf dataset/output dataset/snapshots results

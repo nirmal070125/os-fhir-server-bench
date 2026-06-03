@@ -50,7 +50,14 @@ mkdir -p "$OUTDIR"
 echo "==> k6 $SCN -> $BASE_URL (p99<${P99_MS}ms, err<${MAX_ERROR_RATE}, capture=$CAPTURE)"
 if [[ "$CAPTURE" == "1" ]]; then
   export SUMMARY_OUT="$OUTDIR/summary.json"
-  k6 run --out "json=$OUTDIR/metrics.json" "$SCRIPT"
+  OUTS=(--out "json=$OUTDIR/metrics.json")
+  # Also stream to Prometheus (live Grafana view) when an obs endpoint is configured.
+  # k6 reads the target URL from K6_PROMETHEUS_RW_SERVER_URL automatically.
+  if [[ -n "${K6_PROMETHEUS_RW_SERVER_URL:-}" ]]; then
+    export K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true   # enables histogram_quantile() in Grafana
+    OUTS+=(--out experimental-prometheus-rw)
+  fi
+  k6 run "${OUTS[@]}" "$SCRIPT"
 else
   export SUMMARY_OUT=/dev/null   # warm-up: run load, throw the numbers away
   k6 run "$SCRIPT"
