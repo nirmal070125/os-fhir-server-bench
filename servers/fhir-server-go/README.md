@@ -29,16 +29,20 @@ plus those commits, so we benchmark exactly what ships once #167 lands. Bump the
   so the comparison is apples-to-apples core CRUD/search. Flip both on in the config to
   measure IG-validation cost (and set the equivalent on the comparators).
 
-## Known limit found by the harness
+## Known limit found by the harness — FIXED upstream (PR #170)
 
-The server hardcodes `WriteTimeout: 60s` (`cmd/server/main.go`) — in Go that clock
-spans the whole handler execution, so a very large transaction bundle (Synthea emits
-up to ~40 MB patients) that takes >60s under CPU contention gets its connection cut
-**after the DB commit**: the client sees a transport error but the data is in.
-Seeding surfaces this at `SEED_CONCURRENCY=8` on 4 CPUs. Fix in flight: make the
-server's HTTP timeouts env-configurable upstream, then bump the pin and set a
-generous write timeout here. Until then, lower `SEED_CONCURRENCY` if you see
-`CLIENT-ERR` on big bundles (and never blind-retry a transaction POST — verify first).
+The server used to hardcode `WriteTimeout: 60s` — in Go that clock spans the whole
+handler execution, so a very large transaction bundle (Synthea emits up to ~40 MB
+patients) taking >60s under CPU contention got its connection cut **after the DB
+commit**: the client saw a transport error but the data was in. The harness surfaced
+this deterministically at `SEED_CONCURRENCY=8` on 4 CPUs.
+
+Fixed by [PR #170](https://github.com/wso2/open-healthcare-prebuilt-services/pull/170)
+(merged): `SERVER_READ/WRITE/IDLE_TIMEOUT` env vars. This profile sets
+`SERVER_WRITE_TIMEOUT` from `servers.fhir-server-go.write_timeout` (default `10m`),
+and the pin includes the fix — re-verified: the previously-failing parallel seed now
+passes 63/63. If you ever see `CLIENT-ERR` from `seed.sh`, never blind-retry a
+transaction POST — verify first (the server may have committed).
 
 ## Usage
 

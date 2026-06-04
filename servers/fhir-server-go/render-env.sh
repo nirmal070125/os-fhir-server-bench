@@ -38,6 +38,7 @@ FSG_BASE_URL=http://localhost:$(cfg $S.port)$(cfg $S.base_path)
 FSG_LOG_LEVEL=info
 FSG_IG_PACKAGES=$(cfg $S.ig_packages)
 FSG_VALIDATE_ON_WRITE=$(cfg $S.validate_on_write)
+FSG_WRITE_TIMEOUT=$(cfg $S.write_timeout)
 
 # Postgres credentials (match upstream compose defaults; not secrets — local-only DB).
 FSG_DB_NAME=fhirdb

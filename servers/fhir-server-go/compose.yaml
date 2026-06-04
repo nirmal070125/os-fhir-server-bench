@@ -49,6 +49,9 @@ services:
       FHIR_VALIDATE_ON_WRITE: "${FSG_VALIDATE_ON_WRITE}"
       IG_PACKAGES: "${FSG_IG_PACKAGES}"
       IG_CACHE_DIR: /data/fhir-ig-cache
+      # Whole-handler deadline (PR #170) — must cover the largest transaction
+      # bundle during seeding; the 60s default provably cut a ~38MB bundle under load.
+      SERVER_WRITE_TIMEOUT: "${FSG_WRITE_TIMEOUT}"
     volumes:
       - igcache:/data/fhir-ig-cache
     depends_on:
