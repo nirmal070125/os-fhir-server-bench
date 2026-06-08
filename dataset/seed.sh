@@ -20,7 +20,10 @@ BASE="${1:?usage: seed.sh <fhir_base_url> [bundle_dir]}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIZE="$("$ROOT/bin/cfg" dataset.size)"
 DIR="${2:-$ROOT/dataset/output/$SIZE/fhir}"
-CONC="${SEED_CONCURRENCY:-8}"
+# Default 4: at 8, the two largest Synthea bundles intermittently fail mid-transaction
+# with "conn closed" (Postgres connection dropped under contention), which aborts the
+# whole run. 4 is reliable; raise it for speed on a beefy DB if seeding 0-fails for you.
+CONC="${SEED_CONCURRENCY:-4}"
 
 export SEED_BASE="$BASE" AUTH_HEADER="${AUTH_HEADER:-}" TLS_INSECURE="${TLS_INSECURE:-0}"
 

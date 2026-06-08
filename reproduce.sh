@@ -33,6 +33,14 @@ make check
 echo "==> Provisioning infrastructure"
 make infra-up
 
+# Default path: run the benchmark ON the Azure VMs (heavy work never touches the
+# operator's disk). Set RUN_LOCAL=1 to instead run everything on this machine.
+if [[ "${RUN_LOCAL:-0}" != "1" ]]; then
+  echo "==> Wiring operator -> VMs (remote execution)"
+  orchestrator/remote-setup.sh
+  set -a; source .remote.env; set +a   # REMOTE=1 + SUT_SSH/LOADGEN_SSH/...
+fi
+
 echo "==> Seeding dataset"
 make seed
 

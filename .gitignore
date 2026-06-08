@@ -23,3 +23,6 @@ results/
 
 # Synthea jar (174MB — generate.sh downloads the pinned version)
 dataset/*.jar
+
+# Remote-run wiring (generated from Terraform outputs)
+.remote.env

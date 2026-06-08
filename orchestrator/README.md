@@ -18,6 +18,30 @@ run  :  per enabled server x scenario x repetition ->
 
 `all` does seed then run for each server.
 
+## Execution modes — local vs Azure (remote)
+
+`orchestrate.sh` runs the same logic in two modes:
+
+- **Local** (default): every step runs on this machine against `localhost`. Used for
+  development and the CI smoke test.
+- **Remote** (`REMOTE=1`, set automatically by `reproduce.sh` from Terraform outputs):
+  this process is the **operator/controller** and ssh-routes each step to the right VM —
+  **no work touches the operator's disk, and there is no VM→VM ssh.**
+
+  | Step | Runs on |
+  |---|---|
+  | generate Synthea, seed (POST to SUT private IP), k6 warm-up/measure | **loadgen VM** |
+  | build/up/down, snapshot, restore, readiness wait | **SUT VM** |
+  | terraform, report generation, final `results/` | **operator (your machine)** — KB–few MB only |
+
+  Wiring (from `orchestrator/remote-setup.sh`): `SUT_SSH`, `LOADGEN_SSH`, `SUT_REPO`,
+  `LOADGEN_REPO`, `SUT_PRIVATE_HOST`, `SSH_OPTS`. The working tree is copied to both VMs
+  via tar-over-ssh (code + your `bench.config.yaml`; no jar/dataset/images). Per-rep k6
+  output is produced on the loadgen and `scp`'d back to `results/`.
+
+  This is what makes `./reproduce.sh` actually run the benchmark **on Azure** — the
+  earlier wiring provisioned VMs but ran everything locally.
+
 ## Why this order
 
 - **Same starting state, every run** — the snapshot is restored *before each rep*,
