@@ -16,10 +16,25 @@ need() {
 echo "Tools:"
 need terraform; need az; need ssh; need make; need yq
 
-echo "Azure credentials (.env / environment):"
-for v in ARM_SUBSCRIPTION_ID ARM_TENANT_ID ARM_CLIENT_ID ARM_CLIENT_SECRET; do
-  if [[ -n "${!v:-}" ]]; then grn "  ok   $v"; else red "  MISS $v"; ok=0; fi
-done
+echo "Azure auth:"
+# ARM_SUBSCRIPTION_ID is always required (azurerm v4 needs an explicit subscription).
+if [[ -n "${ARM_SUBSCRIPTION_ID:-}" ]]; then grn "  ok   ARM_SUBSCRIPTION_ID"; else red "  MISS ARM_SUBSCRIPTION_ID"; ok=0; fi
+
+# Two supported auth modes:
+#   1. Service principal — ARM_TENANT_ID + ARM_CLIENT_ID + ARM_CLIENT_SECRET (used by CI).
+#   2. Azure CLI — your own `az login` session (no SP needed; requires Contributor on the sub).
+if [[ -n "${ARM_CLIENT_ID:-}" && -n "${ARM_CLIENT_SECRET:-}" && -n "${ARM_TENANT_ID:-}" ]]; then
+  grn "  ok   auth mode: service principal (ARM_CLIENT_*)"
+elif [[ -z "${ARM_CLIENT_ID:-}${ARM_CLIENT_SECRET:-}" ]] && az account show >/dev/null 2>&1; then
+  grn "  ok   auth mode: Azure CLI ($(az account show --query user.name -o tsv 2>/dev/null))"
+  active="$(az account show --query id -o tsv 2>/dev/null || echo '')"
+  if [[ -n "${ARM_SUBSCRIPTION_ID:-}" && "$active" != "$ARM_SUBSCRIPTION_ID" ]]; then
+    warn "  WARN active az subscription ($active) != ARM_SUBSCRIPTION_ID — run: az account set --subscription \$ARM_SUBSCRIPTION_ID"
+  fi
+else
+  red "  MISS Azure auth — set ARM_CLIENT_ID/SECRET/TENANT_ID (service principal), or run 'az login' (CLI auth)"
+  ok=0
+fi
 
 echo "Config sanity:"
 key_path="$(yq -r '.azure.ssh_public_key_path' bench.config.yaml 2>/dev/null || echo '')"

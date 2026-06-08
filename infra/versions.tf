@@ -13,7 +13,10 @@ terraform {
   }
 }
 
-# Auth comes from ARM_* environment variables (see .env.example) — no creds in code.
+# Auth: no creds in code. Two modes, both via the standard azurerm discovery —
+#   1. Service principal: ARM_SUBSCRIPTION_ID + ARM_TENANT_ID + ARM_CLIENT_ID + ARM_CLIENT_SECRET
+#   2. Azure CLI: ARM_SUBSCRIPTION_ID + an `az login` session (no SP needed)
+# azurerm v4 requires an explicit subscription, supplied by ARM_SUBSCRIPTION_ID.
 provider "azurerm" {
   features {}
 }
