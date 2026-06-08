@@ -60,6 +60,6 @@ LOADGEN_SSH=$USER@$loadgen_ip
 SUT_REPO=$REPO_DIR
 LOADGEN_REPO=$REPO_DIR
 SUT_PRIVATE_HOST=$sut_priv
-SSH_OPTS=$SSH_OPTS
+SSH_OPTS="$SSH_OPTS"
 EOF
 echo "==> wrote .remote.env  (SUT=$sut_ip  loadgen=$loadgen_ip  sut_private=$sut_priv)"
