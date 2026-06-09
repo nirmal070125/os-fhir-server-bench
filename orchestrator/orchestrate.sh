@@ -148,7 +148,12 @@ run_rep() {
   sut_wait_ready "$server"
   loadgen_run "CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'"
   loadgen_run "CAPTURE=1 OUTDIR='$outdir' scenarios/run.sh '$scenario' '$target' '${MEASURE_S}s'"
-  pull_results "$outdir"
+  # Pull ONLY the small summary.json to the operator (that's all report.py needs).
+  # The raw per-point metrics.json can be GBs (saturation/high throughput) and stays
+  # on the loadgen VM — archived to Blob if configured, discarded on teardown.
+  # PULL_RAW=1 to also fetch it (rarely wanted; large).
+  pull_results "$outdir/summary.json"
+  [[ "${PULL_RAW:-0}" == "1" ]] && pull_results "$outdir/metrics.json" || true
   [[ "$COOLDOWN_S" -gt 0 ]] && sleep "$COOLDOWN_S" || true
 }
 

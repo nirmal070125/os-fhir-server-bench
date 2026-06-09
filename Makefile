@@ -41,9 +41,10 @@ run-status: ## Show detached-run status (run.log tail / DONE)
 	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit $$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
 	  || echo "no detached run found (.detached.env missing — run 'make run-detached')"
 
-fetch-results: ## Pull results/ from the loadgen VM and generate the report locally
+fetch-results: ## Pull ONLY summaries + manifests from the loadgen VM and build the report locally
 	@set -a; . ./.detached.env; set +a; \
-	  scp $$SSH_OPTS -q -r "$$ADMIN@$$LOADGEN_IP:$$REPO/results" . && \
+	  echo "==> fetching summaries + manifests (not the multi-GB raw metrics.json)"; \
+	  ssh $$SSH_OPTS "$$ADMIN@$$LOADGEN_IP" "cd $$REPO && tar czf - \$$(find results \( -name summary.json -o -name run-manifest.json \) -print)" | tar xzf - && \
 	  python3 reporting/report.py
 
 validate-small: ## Fast Azure smoke: small dataset, 1 rep, short windows, SSH locked to your IP, VMs kept up
