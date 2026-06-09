@@ -130,9 +130,16 @@ workload:
     max_vus: 2000
 
 # Pass/fail line for "max sustainable throughput"; full curves are published too.
+# Default p99 is read-oriented (interactive GET/search). Writes are heavier, so
+# per-scenario overrides apply an operation-appropriate bar — set on operation type,
+# NOT to flatter any server, and applied identically to all six.
 slo:
-  p99_ms: 500
+  p99_ms: 500              # default: reads (read-mix) + the saturation knee
   max_error_rate: 0.001
+  per_scenario:
+    ingest:
+      p99_ms: 1000         # transaction-bundle writes: 4 resources parsed + written +
+                           # search-indexed in one atomic tx — sub-second is the fair bar
 
 reporting:
   tsdb: prometheus

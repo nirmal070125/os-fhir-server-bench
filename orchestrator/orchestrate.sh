@@ -178,6 +178,14 @@ write_manifest() {
   local k6ver nproc
   k6ver="$(loadgen_run 'k6 version 2>/dev/null | head -1' 2>/dev/null || echo unknown)"
   nproc="$(sut_run 'getconf _NPROCESSORS_ONLN 2>/dev/null' 2>/dev/null || echo '?')"
+  # Effective p99 SLO per scenario (per_scenario override, else default) — so the
+  # report is self-contained and can mark each scenario against its own bar.
+  local slo_map="" s p
+  for s in "${SCENARIOS[@]}"; do
+    p="$(cfg "slo.per_scenario.\"$s\".p99_ms" 2>/dev/null || cfg slo.p99_ms)"
+    slo_map+="\"$s\": $p, "
+  done
+  slo_map="${slo_map%, }"
   mkdir -p "$(dirname "$out")"
   {
     echo '{'
@@ -190,7 +198,7 @@ write_manifest() {
     echo "  \"pin\": { \"repo\": \"$(cfg "servers.$server.repo" 2>/dev/null || echo n/a)\", \"ref\": \"$(cfg "servers.$server.ref" 2>/dev/null || echo n/a)\", \"commit\": \"$(cfg "servers.$server.commit" 2>/dev/null || echo n/a)\" },"
     echo "  \"limits\": { \"sut_cpus\": $(cfg limits.sut_cpus), \"sut_mem\": \"$(cfg limits.sut_mem)\", \"db_cpus\": $(cfg limits.db_cpus), \"db_mem\": \"$(cfg limits.db_mem)\" },"
     echo "  \"dataset\": { \"size\": \"$SIZE\", \"hash\": \"$hash\" },"
-    echo "  \"slo\": { \"p99_ms\": $(cfg slo.p99_ms), \"max_error_rate\": $(cfg slo.max_error_rate) },"
+    echo "  \"slo\": { \"p99_ms\": $(cfg slo.p99_ms), \"max_error_rate\": $(cfg slo.max_error_rate), \"p99_ms_by_scenario\": { $slo_map } },"
     echo "  \"run\": { \"repetitions\": $REPS, \"warmup_s\": $WARMUP_S, \"measure_s\": $MEASURE_S, \"cooldown_s\": $COOLDOWN_S },"
     echo "  \"saturation_ramp\": { \"start_rate\": $(cfg workload.saturation.start_rate), \"step_rate\": $(cfg workload.saturation.step_rate), \"step_duration\": \"$(cfg workload.saturation.step_duration)\", \"max_rate\": $(cfg workload.saturation.max_rate), \"abort_delay_s\": 10 },"
     echo "  \"scenarios\": [$(printf '"%s",' "${SCENARIOS[@]}" | sed 's/,$//')]"

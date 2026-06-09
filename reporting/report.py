@@ -126,6 +126,10 @@ def main():
     slo = any_m.get("slo", {})
     p99_slo = slo.get("p99_ms", 500)
     err_slo = slo.get("max_error_rate", 0.001)
+    p99_by_scen = slo.get("p99_ms_by_scenario", {})
+    # Each scenario is judged against its own p99 bar (e.g. ingest writes are heavier).
+    def p99_slo_for(scen):
+        return p99_by_scen.get(scen, p99_slo)
 
     all_scenarios = sorted({s for v in data.values() for s in v["scenarios"]})
 
@@ -137,7 +141,9 @@ def main():
         f"- **Dataset:** {ds.get('size','?')} (hash `{str(ds.get('hash',''))[:12]}`)  \n"
         f"- **Envelope (per server):** {lim.get('sut_cpus','?')} vCPU / {lim.get('sut_mem','?')} app, "
         f"{lim.get('db_cpus','?')} vCPU / {lim.get('db_mem','?')} db  \n"
-        f"- **SLO:** p99 < {p99_slo} ms AND error rate < {err_slo}  \n"
+        f"- **SLO:** error rate < {err_slo}; p99 < {p99_slo} ms (default/reads)"
+        + (f", overrides: {', '.join(f'{k} {v}ms' for k, v in p99_by_scen.items() if v != p99_slo)}" if any(v != p99_slo for v in p99_by_scen.values()) else "")
+        + " — per-table below  \n"
         f"- **Reps:** {any_m.get('run',{}).get('repetitions','?')} "
         f"(measure {any_m.get('run',{}).get('measure_s','?')}s, warm-up "
         f"{any_m.get('run',{}).get('warmup_s','?')}s discarded)  \n"
@@ -185,6 +191,8 @@ def main():
                 })
             continue
 
+        scen_p99_slo = p99_slo_for(scen)
+        md.append(f"_SLO: p99 < {scen_p99_slo} ms AND error rate < {err_slo}_\n")
         md.append("| Server | Throughput (req/s) | Thru/vCPU | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | Error rate | SLO |")
         md.append("|---|---|---|---|---|---|---|---|---|")
         # rank by median throughput desc
@@ -200,7 +208,7 @@ def main():
             p99_med, p99_lo, p99_hi = agg([r["p99"] for r in reps])
             p999_med, _, _ = agg([r["p99_9"] for r in reps])
             err_med, _, err_hi = agg([r["err"] for r in reps])
-            passed = (p99_med < p99_slo) and (err_hi < err_slo)
+            passed = (p99_med < scen_p99_slo) and (err_hi < err_slo)
             ranked.append((rate_med, server, cpus, rate_med, p50_med, p95_med,
                            p99_med, p99_lo, p99_hi, p999_med, err_med, passed))
         ranked.sort(reverse=True)

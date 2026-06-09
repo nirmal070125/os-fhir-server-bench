@@ -17,7 +17,8 @@ cfg() { "$ROOT/bin/cfg" "$1"; }
 command -v k6 >/dev/null || { echo "k6 not found (installed on the loadgen VM by cloud-init)"; exit 1; }
 
 export BASE_URL
-export P99_MS="$(cfg slo.p99_ms)"
+# Per-scenario p99 SLO (e.g. ingest is heavier) overriding the read-oriented default.
+export P99_MS="$(cfg "slo.per_scenario.\"$SCN\".p99_ms" 2>/dev/null || cfg slo.p99_ms)"
 export MAX_ERROR_RATE="$(cfg slo.max_error_rate)"
 
 # CAPTURE=0 (warm-up, discarded) vs 1 (measured). Resolved early because saturation
