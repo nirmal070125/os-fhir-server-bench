@@ -51,33 +51,87 @@ echo "==> installing the controller key + tmux on the loadgen"
 scp $OPTS -q "$TMPK" "$USER@$loadgen_ip:.ssh/bench_ctrl"
 ssh $OPTS "$USER@$loadgen_ip" "chmod 600 ~/.ssh/bench_ctrl && (command -v tmux >/dev/null || sudo apt-get install -y -qq tmux)"
 
-# Pass-through tunables (empty -> orchestrate falls back to bench.config.yaml).
-envs=""
+# --- storage SAS so the run publishes its report to Blob (no az needed on the VM) ---
+# The operator (you) has az; mint a short-lived container write-SAS for the upload and
+# a 7-day read URL for report.md to view later in a browser. All non-fatal: if it
+# can't be set up, the run still keeps the report on the VM (use `make fetch-results`).
+acct="$(echo "$out" | yq -r '.storage_account.value // ""')"
+container="$(echo "$out" | yq -r '.blob_container.value // ""')"
+prefix="run-$(date -u '+%Y%m%d-%H%M%S')"
+upload_url=""; report_view=""
+if [[ -n "$acct" && -n "$container" ]] && command -v az >/dev/null 2>&1; then
+  key="$(az storage account keys list -g "$(cfg azure.resource_group)" -n "$acct" --query '[0].value' -o tsv 2>/dev/null || true)"
+  if [[ -n "$key" ]]; then
+    wexp="$(date -u -v+2d '+%Y-%m-%dT%H:%MZ' 2>/dev/null || date -u -d '+2 days' '+%Y-%m-%dT%H:%MZ')"
+    rexp="$(date -u -v+7d '+%Y-%m-%dT%H:%MZ' 2>/dev/null || date -u -d '+7 days' '+%Y-%m-%dT%H:%MZ')"
+    wsas="$(az storage container generate-sas --account-name "$acct" --account-key "$key" -n "$container" --permissions cw --https-only --expiry "$wexp" -o tsv 2>/dev/null || true)"
+    [[ -n "$wsas" ]] && upload_url="https://$acct.blob.core.windows.net/$container?$wsas"
+    report_view="$(az storage blob generate-sas --account-name "$acct" --account-key "$key" -c "$container" -n "$prefix/report.md" --permissions r --https-only --full-uri --expiry "$rexp" -o tsv 2>/dev/null || true)"
+  fi
+fi
+[[ -z "$upload_url" ]] && echo "NOTE: Blob SAS unavailable — report will stay on the VM; use 'make fetch-results'." >&2
+
+# --- write a self-contained launch script to the VM, run it in tmux ---------------
+# Generating a file (vs a deeply-nested ssh/tmux command) avoids quoting hell with the
+# SAS token. orchestrate -> report -> upload, all logged to run.log; run.done at the end.
+upload_line=":"
+[[ -n "$upload_url" ]] && upload_line="reporting/upload-sas.sh \"$upload_url\" \"$prefix\" || true"
+exports="export REMOTE=1 LOADGEN_LOCAL=1 SUT_SSH='$USER@$sut_priv' SUT_REPO='$REPO' SUT_PRIVATE_HOST='$sut_priv'
+export SSH_OPTS='-i /home/$USER/.ssh/bench_ctrl -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'"
 for v in SIZE REPS WARMUP_S MEASURE_S COOLDOWN_S SCENARIOS SEED_CONCURRENCY; do
-  [[ -n "${!v:-}" ]] && envs+="$v='${!v}' "
+  [[ -n "${!v:-}" ]] && exports+="
+export $v='${!v}'"
 done
-CTRL_OPTS="-i \$HOME/.ssh/bench_ctrl -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-REMOTE_CMD="cd '$REPO' && REMOTE=1 LOADGEN_LOCAL=1 SUT_SSH='$USER@$sut_priv' SUT_REPO='$REPO' SUT_PRIVATE_HOST='$sut_priv' SSH_OPTS=\"$CTRL_OPTS\" $envs orchestrator/orchestrate.sh all > run.log 2>&1; echo \$? > run.exit; touch run.done"
+
+launch="$(mktemp)"
+cat > "$launch" <<LAUNCH
+#!/usr/bin/env bash
+cd "$REPO"
+$exports
+{
+  orchestrator/orchestrate.sh all
+  echo \$? > run.exit
+  python3 reporting/report.py || true
+  $upload_line
+} > run.log 2>&1
+touch run.done
+LAUNCH
+scp $OPTS -q "$launch" "$USER@$loadgen_ip:$REPO/.detached-run.sh"
+rm -f "$launch"
 
 echo "==> launching controller in tmux 'bench' on the loadgen"
-ssh $OPTS "$USER@$loadgen_ip" "cd '$REPO' && tmux new-session -d -s bench \"$REMOTE_CMD\""
+ssh $OPTS "$USER@$loadgen_ip" "chmod +x '$REPO/.detached-run.sh' && tmux new-session -d -s bench \"bash '$REPO/.detached-run.sh'\""
 
 cat > "$ROOT/.detached.env" <<EOF
 ADMIN=$USER
 LOADGEN_IP=$loadgen_ip
 SUT_IP=$sut_ip
 REPO=$REPO
+PREFIX=$prefix
 SSH_OPTS="$OPTS"
 EOF
+
 cat <<EOF
 
-==> Detached run started on the loadgen VM (tmux session 'bench').
-    Your laptop can now sleep / disconnect.
+==> Detached run started on the loadgen VM (tmux 'bench'). Your laptop can now
+    sleep / disconnect / shut down — the run + report upload continue on the VM.
 
-    Watch:   make run-status         (or: ssh $OPTS $USER@$loadgen_ip 'tail -f $REPO/run.log')
-    Attach:  ssh $OPTS $USER@$loadgen_ip -t 'tmux attach -t bench'
-    Fetch:   make fetch-results      (when run-status shows DONE)
-    Stop:    ssh $OPTS $USER@$loadgen_ip 'tmux kill-session -t bench'
+EOF
+if [[ -n "$report_view" ]]; then cat <<EOF
+    📊 Report (open in a browser once the run finishes, ~20-40 min — no laptop needed):
+       $report_view
 
-    Remember: 'make infra-down' once you've fetched results (stops billing).
+EOF
+else cat <<EOF
+    (Blob publishing unavailable — fetch with 'make fetch-results' from your laptop.)
+
+EOF
+fi
+cat <<EOF
+    Optional, from your laptop:
+      make run-status     # progress / DONE
+      make fetch-results  # also pull results locally
+      ssh $OPTS $USER@$loadgen_ip -t 'tmux attach -t bench'   # watch live
+
+    When you've seen the report:  make infra-down   (stops billing)
 EOF

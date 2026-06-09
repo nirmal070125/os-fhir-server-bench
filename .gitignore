@@ -31,3 +31,4 @@ dataset/*.jar
 # Python bytecode cache
 __pycache__/
 *.pyc
+.detached-run.sh
