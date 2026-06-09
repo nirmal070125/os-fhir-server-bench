@@ -5,7 +5,7 @@
 #   dataset/hash.sh [bundle_dir]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SIZE="$("$ROOT/bin/cfg" dataset.size)"
+SIZE="${SIZE:-$("$ROOT/bin/cfg" dataset.size)}"
 DIR="${1:-$ROOT/dataset/output/$SIZE/fhir}"
 
 if command -v sha256sum >/dev/null 2>&1; then SHA=(sha256sum); else SHA=(shasum -a 256); fi

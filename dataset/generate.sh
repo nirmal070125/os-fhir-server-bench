@@ -10,7 +10,7 @@ cfg() { "$ROOT/bin/cfg" "$1"; }
 VERSION="$(cfg dataset.synthea_version)"
 SEED="$(cfg dataset.seed)"
 REFDATE="$(cfg dataset.reference_date)"
-SIZE="$(cfg dataset.size)"
+SIZE="${SIZE:-$(cfg dataset.size)}"
 POP="$(cfg "dataset.populations.${SIZE}")"
 
 OUT="${1:-$ROOT/dataset/output/$SIZE}"

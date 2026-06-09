@@ -33,7 +33,7 @@ log() { printf '\033[36m[orchestrate]\033[0m %s\n' "$*"; }
 CMD="${1:-all}"   # seed | run | all
 
 # --- resolve config (env overrides win) ------------------------------------
-SIZE="$(cfg dataset.size)"
+SIZE="${SIZE:-$(cfg dataset.size)}"
 SERVERS_CFG=()   # portable to bash 3.2 — no mapfile/readarray
 while IFS= read -r _s; do [[ -n "$_s" ]] && SERVERS_CFG+=("$_s"); done \
   < <(yq -r '.servers | to_entries | map(select(.value.enabled)) | .[].key' bench.config.yaml)
@@ -126,9 +126,11 @@ phase_seed() {
   log "seed: $server — generate+load (loadgen) -> snapshot (SUT)"
   # generate + seed run on the loadgen (JDK + dataset live there); seed POSTs to the
   # SUT's API over the private network. build/up + snapshot run on the SUT.
-  loadgen_run "[ -d dataset/output/$SIZE/fhir ] || dataset/generate.sh"
+  # SIZE=$SIZE is embedded so a SIZE override reaches the VM (it re-derives from its
+  # own config copy otherwise). snapshot/restore take an explicit path, so they don't.
+  loadgen_run "[ -d dataset/output/$SIZE/fhir ] || SIZE=$SIZE dataset/generate.sh"
   start_server "$server"
-  loadgen_run "dataset/seed.sh '$(k6_target_base "$server")'"
+  loadgen_run "SIZE=$SIZE dataset/seed.sh '$(k6_target_base "$server")'"
   sut_run "mkdir -p '$SNAP_DIR' && $(db_env_prefix "$server")dataset/snapshot_${engine}.sh '$snap'"
 }
 
@@ -151,7 +153,7 @@ write_manifest() {
   local server="$1" out="$ROOT/results/$server/run-manifest.json"
   local sha; sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   # dataset lives on the loadgen (where it was generated), so hash there.
-  local hash; hash="$(loadgen_run "dataset/hash.sh 2>/dev/null | awk 'NR==1{print \$1}'" 2>/dev/null || true)"; hash="${hash:-unknown}"
+  local hash; hash="$(loadgen_run "SIZE=$SIZE dataset/hash.sh 2>/dev/null | awk 'NR==1{print \$1}'" 2>/dev/null || true)"; hash="${hash:-unknown}"
   local k6ver nproc
   k6ver="$(loadgen_run 'k6 version 2>/dev/null | head -1' 2>/dev/null || echo unknown)"
   nproc="$(sut_run 'getconf _NPROCESSORS_ONLN 2>/dev/null' 2>/dev/null || echo '?')"

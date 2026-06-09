@@ -18,7 +18,7 @@
 set -euo pipefail
 BASE="${1:?usage: seed.sh <fhir_base_url> [bundle_dir]}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SIZE="$("$ROOT/bin/cfg" dataset.size)"
+SIZE="${SIZE:-$("$ROOT/bin/cfg" dataset.size)}"
 DIR="${2:-$ROOT/dataset/output/$SIZE/fhir}"
 # Default 4: at 8, the two largest Synthea bundles intermittently fail mid-transaction
 # with "conn closed" (Postgres connection dropped under contention), which aborts the

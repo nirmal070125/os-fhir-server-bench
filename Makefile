@@ -4,7 +4,7 @@
 SHELL := /bin/bash
 INFRA := infra
 
-.PHONY: help check infra-up infra-down seed run report clean
+.PHONY: help check infra-up infra-down seed run report clean validate-small
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -31,3 +31,10 @@ report: ## Generate comparison report + upload artifacts to Blob
 
 clean: ## Remove local generated dataset/snapshots/results
 	rm -rf dataset/output dataset/snapshots results
+
+validate-small: ## Fast Azure smoke: small dataset, 1 rep, short windows, SSH locked to your IP, VMs kept up
+	@MYIP=$$(curl -fsS ifconfig.me) || { echo "could not detect public IP"; exit 1; }; \
+	  perl -i -pe "s#^(\s*allowed_ssh_cidr:).*#\1 \"$$MYIP/32\"#" bench.config.yaml; \
+	  echo "==> validate-small: SSH locked to $$MYIP/32; size=small, 1 rep, 15s warm-up / 30s measure; KEEP_INFRA=1"; \
+	  echo "    (size/reps/windows are env overrides for THIS run only — your committed config is untouched)"; \
+	  SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 KEEP_INFRA=1 ./reproduce.sh
