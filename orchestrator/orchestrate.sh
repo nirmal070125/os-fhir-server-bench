@@ -127,6 +127,10 @@ phase_seed() {
   if sut_run "[ -f '$snap' ]" 2>/dev/null; then log "seed: snapshot exists ($snap) — skipping"; return; fi
 
   log "seed: $server — generate+load (loadgen) -> snapshot (SUT)"
+  # Seeding requires a CLEAN DB: the dataset uses a fixed seed, so resource IDs are
+  # deterministic — re-seeding onto leftover data from a prior/interrupted run
+  # collides and 500s. Wipe the server + its volume first (no-op if not present).
+  sut_run "servers/$server/down.sh -v" >/dev/null 2>&1 || true
   # generate + seed run on the loadgen (JDK + dataset live there); seed POSTs to the
   # SUT's API over the private network. build/up + snapshot run on the SUT.
   # SIZE=$SIZE is embedded so a SIZE override reaches the VM (it re-derives from its
