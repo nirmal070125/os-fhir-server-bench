@@ -169,6 +169,7 @@ write_manifest() {
     echo "  \"dataset\": { \"size\": \"$SIZE\", \"hash\": \"$hash\" },"
     echo "  \"slo\": { \"p99_ms\": $(cfg slo.p99_ms), \"max_error_rate\": $(cfg slo.max_error_rate) },"
     echo "  \"run\": { \"repetitions\": $REPS, \"warmup_s\": $WARMUP_S, \"measure_s\": $MEASURE_S, \"cooldown_s\": $COOLDOWN_S },"
+    echo "  \"saturation_ramp\": { \"start_rate\": $(cfg workload.saturation.start_rate), \"step_rate\": $(cfg workload.saturation.step_rate), \"step_duration\": \"$(cfg workload.saturation.step_duration)\", \"max_rate\": $(cfg workload.saturation.max_rate), \"abort_delay_s\": 10 },"
     echo "  \"scenarios\": [$(printf '"%s",' "${SCENARIOS[@]}" | sed 's/,$//')]"
     echo '}'
   } > "$out"

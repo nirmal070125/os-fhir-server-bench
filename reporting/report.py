@@ -48,7 +48,41 @@ def rep_row(summary):
         "p99": dur.get("p(99)", 0.0),
         "p99_9": dur.get("p(99.9)", 0.0),
         "err": failed.get("rate", 0.0),
+        "dur_s": summary.get("state", {}).get("testRunDurationMs", 0.0) / 1000.0,
     }
+
+
+def parse_dur(s):
+    """'30s' -> 30.0, '5m' -> 300.0 (Go-ish duration; seconds/minutes only)."""
+    s = str(s).strip()
+    if s.endswith("ms"):
+        return float(s[:-2]) / 1000.0
+    if s.endswith("m"):
+        return float(s[:-1]) * 60.0
+    if s.endswith("s"):
+        return float(s[:-1])
+    return float(s)
+
+
+def max_sustainable(dur_s, ramp):
+    """Max sustainable throughput from a saturation rep.
+
+    saturation ramps the offered rate up and aborts (abortOnFail) ~abort_delay_s
+    after p99/error first breaches the SLO, so the run duration tells us which ramp
+    stage it reached -> the offered rate just before the breach. Returns
+    (rate_req_s, capped) where capped=True means it never breached (sustained the
+    whole ramp, so the true ceiling is >= max_rate). Measurement is untouched; this
+    is pure post-processing of the run duration.
+    """
+    start, step, maxr = ramp["start_rate"], ramp["step_rate"], ramp["max_rate"]
+    step_dur = parse_dur(ramp["step_duration"])
+    abort = ramp.get("abort_delay_s", 10)
+    n_stages = (maxr - start) // step + 1
+    full = n_stages * step_dur
+    if dur_s >= full * 0.98:           # ran the whole ramp without breaching
+        return (maxr, True)
+    stage = max(0, int((dur_s - abort) // step_dur))
+    return (min(maxr, start + step * stage), False)
 
 
 def agg(vals):
@@ -113,6 +147,44 @@ def main():
     csv_rows = []
     for scen in all_scenarios:
         md.append(f"\n## {scen}\n")
+
+        # saturation reports MAX SUSTAINABLE THROUGHPUT (offered rate at SLO breach),
+        # not pass/fail — a ramp is meant to breach the SLO at its top step.
+        if scen == "saturation":
+            md.append("| Server | Max sustainable (req/s) | per vCPU | aggregate p99 (ms) | Error rate |")
+            md.append("|---|---|---|---|---|")
+            sat = []
+            for server, v in data.items():
+                reps = v["scenarios"].get(scen)
+                if not reps:
+                    continue
+                cpus = v["manifest"].get("limits", {}).get("sut_cpus", 1) or 1
+                ramp = v["manifest"].get("saturation_ramp")
+                if not ramp:
+                    continue  # older manifest without ramp params
+                rates, capped = [], False
+                for r in reps:
+                    rate, cap = max_sustainable(r["dur_s"], ramp)
+                    rates.append(rate)
+                    capped = capped or cap
+                ms_med = statistics.median(rates)
+                p99_med, _, _ = agg([r["p99"] for r in reps])
+                err_med, _, _ = agg([r["err"] for r in reps])
+                sat.append((ms_med, server, cpus, ms_med, capped, p99_med, err_med))
+            sat.sort(reverse=True)
+            for (_, server, cpus, ms_med, capped, p99_med, err_med) in sat:
+                label = f"≥ {ms_med:.0f} (no breach)" if capped else f"~{ms_med:.0f}"
+                md.append(f"| {server} | {label} | {ms_med/cpus:.0f} | {p99_med:.1f} | {err_med*100:.3f}% |")
+                csv_rows.append({
+                    "scenario": scen, "server": server, "sut_cpus": cpus,
+                    "throughput_rps": round(ms_med, 2),
+                    "throughput_per_vcpu": round(ms_med / cpus, 2),
+                    "p50_ms": "", "p95_ms": "",
+                    "p99_ms": round(p99_med, 2), "p99_9_ms": "",
+                    "error_rate": round(err_med, 6), "slo_pass": "max-sustainable",
+                })
+            continue
+
         md.append("| Server | Throughput (req/s) | Thru/vCPU | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | Error rate | SLO |")
         md.append("|---|---|---|---|---|---|---|---|---|")
         # rank by median throughput desc
@@ -149,7 +221,10 @@ def main():
             })
 
     md.append("\n> Throughput/error are medians across reps; p99 shows ±half-spread. "
-              "Throughput/vCPU is the fairness-normalized headline.\n")
+              "Throughput/vCPU is the fairness-normalized headline. "
+              "**saturation** reports max sustainable throughput — the offered rate just "
+              "before p99/error breached the SLO (`≥ X (no breach)` means it sustained the "
+              "whole ramp); its p99 is the aggregate over the full ramp, expected to be high.\n")
 
     report_md = RESULTS / "report.md"
     report_md.write_text("\n".join(md) + "\n")
