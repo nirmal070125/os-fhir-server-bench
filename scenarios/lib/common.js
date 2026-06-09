@@ -117,6 +117,17 @@ export function thresholds(abort = false) {
   };
 }
 
+// Re-host an absolute URL onto BASE's origin. FHIR servers emit ABSOLUTE
+// Bundle.link[next] URLs built from their configured base (e.g. http://localhost:9090
+// /fhir/r4/...), which is NOT the address the load generator uses to reach the SUT
+// (private IP). Following them verbatim dials the wrong host -> "connection refused".
+// Keep the server's opaque continuation query; swap in the origin we actually use.
+function rehost(absUrl) {
+  const baseOrigin = BASE.match(/^https?:\/\/[^/]+/)[0];      // scheme://host:port of BASE
+  const path = String(absUrl).replace(/^https?:\/\/[^/]+/, ''); // /fhir/r4/...?token
+  return baseOrigin + path;
+}
+
 // ---- setup: build a pool of real resource ids to read --------------------
 // Pages the server's own API (no external id file) so reads hit existing data.
 export function collectIds(resourceType, want) {
@@ -133,7 +144,7 @@ export function collectIds(resourceType, want) {
       if (ids.length >= want) break;
     }
     const next = (bundle.link || []).find((l) => l.relation === 'next');
-    url = next ? next.url : null;
+    url = next ? rehost(next.url) : null;   // route pagination to the reachable host
   }
   return ids;
 }
