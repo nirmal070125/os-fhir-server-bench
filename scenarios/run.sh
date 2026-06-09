@@ -60,6 +60,21 @@ esac
 OUTDIR="${OUTDIR:-$ROOT/results/$SCN}"
 mkdir -p "$OUTDIR"
 
+# k6 exit codes: 0 = all thresholds passed; 99 = a threshold was crossed (incl.
+# abortOnFail). Exit 99 is a VALID RESULT — the SLO simply wasn't met (e.g. ingest
+# p99 > target, or saturation hit its latency knee) — and report.py decides pass/fail
+# from the measured numbers. Only OTHER non-zero codes are real errors (couldn't
+# connect, bad script) that should fail the run.
+run_k6() {
+  local rc=0
+  k6 run "$@" || rc=$?
+  if [[ "$rc" != 0 && "$rc" != 99 ]]; then
+    echo "ERROR: k6 failed (exit $rc) — operational error, not an SLO breach" >&2
+    return "$rc"
+  fi
+  return 0
+}
+
 echo "==> k6 $SCN -> $BASE_URL (p99<${P99_MS}ms, err<${MAX_ERROR_RATE}, capture=$CAPTURE)"
 if [[ "$CAPTURE" == "1" ]]; then
   export SUMMARY_OUT="$OUTDIR/summary.json"
@@ -70,8 +85,8 @@ if [[ "$CAPTURE" == "1" ]]; then
     export K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true   # enables histogram_quantile() in Grafana
     OUTS+=(--out experimental-prometheus-rw)
   fi
-  k6 run "${OUTS[@]}" "$SCRIPT"
+  run_k6 "${OUTS[@]}" "$SCRIPT"
 else
   export SUMMARY_OUT=/dev/null   # warm-up: run load, throw the numbers away
-  k6 run "$SCRIPT"
+  run_k6 "$SCRIPT"
 fi
