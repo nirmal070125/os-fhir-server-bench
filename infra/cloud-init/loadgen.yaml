@@ -9,6 +9,7 @@ packages:
   - jq
   - unzip
   - openjdk-17-jre-headless   # Synthea requires Java 17+
+  - tmux
 
 runcmd:
   - curl -fsSL https://get.docker.com | sh

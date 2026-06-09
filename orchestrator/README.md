@@ -42,6 +42,15 @@ run  :  per enabled server x scenario x repetition ->
   This is what makes `./reproduce.sh` actually run the benchmark **on Azure** — the
   earlier wiring provisioned VMs but ran everything locally.
 
+  - **Detached** (`make run-detached`): the operator-driven mode keeps the controller
+    on your laptop, so it dies if the laptop sleeps/disconnects — fine for the short
+    smoke, painful for a multi-hour run. Detached instead launches the controller **on
+    the loadgen VM in a tmux session** (`LOADGEN_LOCAL=1`: generate/seed/k6 run locally
+    there, only the SUT leg ssh's over the private network via a one-off ephemeral key
+    added to the SUT). You kick it off and disconnect; the run survives.
+    `make run-status` tails it, `make fetch-results` pulls `results/` back and builds
+    the report. Infra must already be up (`make infra-up`).
+
 ## Why this order
 
 - **Same starting state, every run** — the snapshot is restored *before each rep*,

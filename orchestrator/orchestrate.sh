@@ -54,13 +54,16 @@ sut_run() {
   if [[ "$REMOTE" == "1" ]]; then ssh $SSH_OPTS "$SUT_SSH" "cd '$SUT_REPO' && $1"
   else ( cd "$ROOT" && eval "$1" ); fi
 }
+# LOADGEN_LOCAL=1 means THIS host IS the loadgen (detached mode: the controller runs
+# on the loadgen VM in tmux, so generate/seed/k6 are local and only the SUT leg ssh's).
 loadgen_run() {
-  if [[ "$REMOTE" == "1" ]]; then ssh $SSH_OPTS "$LOADGEN_SSH" "cd '$LOADGEN_REPO' && $1"
+  if [[ "$REMOTE" == "1" && "${LOADGEN_LOCAL:-0}" != "1" ]]; then ssh $SSH_OPTS "$LOADGEN_SSH" "cd '$LOADGEN_REPO' && $1"
   else ( cd "$ROOT" && eval "$1" ); fi
 }
-# Pull a results subtree produced on the loadgen back to the operator (remote only).
+# Pull a results subtree produced on the loadgen back to the operator. No-op when the
+# loadgen is local (operator-on-loadgen / local dev): results are already here.
 pull_results() { # <repo-relative-path>
-  [[ "$REMOTE" == "1" ]] || return 0
+  [[ "$REMOTE" == "1" && "${LOADGEN_LOCAL:-0}" != "1" ]] || return 0
   mkdir -p "$ROOT/$(dirname "$1")"
   scp $SSH_OPTS -q -r "$LOADGEN_SSH:$LOADGEN_REPO/$1" "$ROOT/$(dirname "$1")/"
 }

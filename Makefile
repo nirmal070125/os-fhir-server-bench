@@ -4,7 +4,8 @@
 SHELL := /bin/bash
 INFRA := infra
 
-.PHONY: help check infra-up infra-down seed run report clean validate-small
+.PHONY: help check infra-up infra-down seed run report clean validate-small \
+        run-detached run-status fetch-results
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -31,6 +32,19 @@ report: ## Generate comparison report + upload artifacts to Blob
 
 clean: ## Remove local generated dataset/snapshots/results
 	rm -rf dataset/output dataset/snapshots results
+
+run-detached: ## Launch the run ON the loadgen VM in tmux (survives laptop sleep). Infra must be up.
+	@orchestrator/run-detached.sh
+
+run-status: ## Show detached-run status (run.log tail / DONE)
+	@set -a; . ./.detached.env; set +a; \
+	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit $$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
+	  || echo "no detached run found (.detached.env missing — run 'make run-detached')"
+
+fetch-results: ## Pull results/ from the loadgen VM and generate the report locally
+	@set -a; . ./.detached.env; set +a; \
+	  scp $$SSH_OPTS -q -r "$$ADMIN@$$LOADGEN_IP:$$REPO/results" . && \
+	  python3 reporting/report.py
 
 validate-small: ## Fast Azure smoke: small dataset, 1 rep, short windows, SSH locked to your IP, VMs kept up
 	@MYIP=$$(curl -fsS ifconfig.me) || { echo "could not detect public IP"; exit 1; }; \

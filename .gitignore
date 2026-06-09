@@ -26,3 +26,4 @@ dataset/*.jar
 
 # Remote-run wiring (generated from Terraform outputs)
 .remote.env
+.detached.env
