@@ -44,28 +44,27 @@ You do **not** install Docker, k6, Java, or any FHIR server locally — Terrafor
 stands those up on the VMs.
 
 **Cost:** ~**$50** for a one-shot all-six *Large (100k)* run; a few dollars per *Medium* dev
-run. Idle VMs cost ~$1/hr, so the harness tears down by default and sets an auto-shutdown
-backstop — but run `make infra-down` if you stop a run halfway.
+run. Idle VMs cost ~$1/hr, so set `auto_stop_when_done: true` (deallocates VMs after the run)
+and/or run `make teardown` when done; an auto-shutdown schedule is the backstop.
 
 ## Quickstart
 
 ```bash
 git clone https://github.com/nirmal070125/os-fhir-server-bench && cd os-fhir-server-bench
-cp .env.example .env && $EDITOR .env          # Azure SP creds + Blob storage
-$EDITOR bench.config.yaml                      # region, sizes, which servers, dataset size, your SSH CIDR
-./reproduce.sh                                 # provision → seed → run → report → teardown
+cp .env.example .env && $EDITOR .env      # Azure auth (az login is enough — see .env.example)
+$EDITOR bench.config.yaml                  # region, sizes, which servers, dataset size
+
+make check        # preflight: tools, Azure auth, config — provisions nothing
+make smoke        # quick validation on Azure (small, ~25 min) — prints a Blob report URL
+make benchmark    # the full run (config defaults) — detached, publishes report to Blob
+make teardown     # destroy everything (stop billing) when done
 ```
 
-Or run stages individually:
-
-```bash
-make check       # preflight: tools, creds, config sanity
-make infra-up    # provision Azure VMs + network + storage
-make seed        # generate Synthea dataset, load each server, snapshot
-make run         # execute the benchmark matrix
-make report      # build comparison report + upload to Blob
-make infra-down  # destroy everything (stop billing)
-```
+`smoke`/`benchmark` provision automatically, run **on the VMs** (your laptop can sleep),
+publish the report to Blob (a URL is printed), and — with `auto_stop_when_done: true` —
+stop the VMs themselves. Check progress with `make status`; pull results locally with
+`make report`. Run `make help` for the full command list (incl. `provision`, `clean`, and
+the `seed`/`run` stages).
 
 ## Configuration
 

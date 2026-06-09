@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Lock azure.allowed_ssh_cidr in bench.config.yaml to this machine's current public
 # IP, so SSH to the VMs works without hand-editing (your IP drifts on Wi-Fi/VPN).
-# Idempotent; called automatically by `make infra-up` before Terraform writes the
+# Idempotent; called automatically by `make provision` before Terraform writes the
 # NSG rule. Non-fatal: if the IP can't be detected (offline), it leaves the existing
 # value and lets preflight/Terraform proceed.
 set -euo pipefail

@@ -1,54 +1,55 @@
-# os-fhir-server-bench — stage runner.
-# `./reproduce.sh` chains these in order; you can also run any stage alone.
-
+# os-fhir-server-bench — command reference. Run `make help`.
+# Lifecycle:  check → smoke → (review) → benchmark → status/report → teardown
 SHELL := /bin/bash
 INFRA := infra
 
-.PHONY: help check infra-up infra-down seed run report clean validate-small \
-        run-detached run-status fetch-results
+.PHONY: help check provision teardown clean smoke benchmark status report seed run
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-check: ## Validate config + credentials before spending anything
-	@bin/preflight.sh
+# ─── primary: run on Azure, laptop-free; report → Blob URL; auto-stops VMs if enabled ───
 
-infra-up: ## Provision Azure VMs + network + storage (Terraform); auto-locks SSH to your IP
-	@bin/lock-ssh-ip.sh
-	cd $(INFRA) && terraform init -input=false && terraform apply -auto-approve
+smoke: provision ## Quick validation run (small data, 1 rep, short windows, truncated saturation) — detached
+	@echo "==> smoke: small / 1 rep / 15s+30s windows / saturation ramp ->300 — detached on the VMs"
+	@SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 \
+	   START_RATE=50 STEP_RATE=50 STEP_DURATION=5s MAX_RATE=300 \
+	   orchestrator/run-detached.sh
 
-infra-down: ## Destroy all Azure resources (run this when done!)
-	cd $(INFRA) && terraform destroy -auto-approve
-
-seed: ## Generate Synthea dataset, load into each enabled server, snapshot
-	@orchestrator/orchestrate.sh seed
-
-run: ## Execute the benchmark matrix (servers x scenarios x reps)
-	@orchestrator/orchestrate.sh run
-
-report: ## Generate comparison report + upload artifacts to Blob
-	@python3 reporting/report.py
-	@if [[ -n "$${BENCH_STORAGE_ACCOUNT:-}" ]]; then reporting/upload.sh; else echo "[report] BENCH_STORAGE_ACCOUNT unset — skipping Blob upload (report.md/csv are in results/)"; fi
-
-clean: ## Remove local generated dataset/snapshots/results
-	rm -rf dataset/output dataset/snapshots results
-
-run-detached: ## Launch the run ON the loadgen VM in tmux (survives laptop sleep). Infra must be up.
+benchmark: provision ## The full run (bench.config.yaml: size, reps, windows, full ramp) — detached
 	@orchestrator/run-detached.sh
 
-run-status: ## Show detached-run status (run.log tail / DONE)
-	@set -a; . ./.detached.env; set +a; \
+status: ## Show the in-flight run's progress (log tail / DONE)
+	@set -a; . ./.detached.env 2>/dev/null; set +a; \
 	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit $$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
-	  || echo "no detached run found (.detached.env missing — run 'make run-detached')"
+	  || echo "no detached run found (.detached.env missing — run 'make smoke' or 'make benchmark')"
 
-fetch-results: ## Pull ONLY summaries + manifests from the loadgen VM and build the report locally
-	@set -a; . ./.detached.env; set +a; \
+report: ## Pull latest results from the loadgen + build report.md locally (use the Blob URL after auto-stop)
+	@set -a; . ./.detached.env 2>/dev/null; set +a; \
 	  echo "==> fetching summaries + manifests (not the multi-GB raw metrics.json)"; \
 	  ssh $$SSH_OPTS "$$ADMIN@$$LOADGEN_IP" "cd $$REPO && tar czf - \$$(find results \( -name summary.json -o -name run-manifest.json \) -print)" | tar xzf - && \
 	  python3 reporting/report.py
 
-validate-small: ## Fast Azure smoke: small dataset, 1 rep, short windows, VMs kept up (SSH IP auto-locked at infra-up)
-	@echo "==> validate-small: size=small, 1 rep, 15s warm-up / 30s measure; KEEP_INFRA=1"
-	@echo "    (size/reps/windows are env overrides for THIS run only; SSH IP auto-locks at infra-up)"
-	@SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 KEEP_INFRA=1 ./reproduce.sh
+# ─── setup & lifecycle ───
+
+check: ## Preflight: tools, Azure auth, config — provisions nothing
+	@bin/preflight.sh
+
+provision: ## Create the Azure infra (idempotent); auto-locks SSH to your current IP
+	@bin/lock-ssh-ip.sh
+	cd $(INFRA) && terraform init -input=false && terraform apply -auto-approve
+
+teardown: ## Destroy all Azure resources — stop billing (run when done)
+	cd $(INFRA) && terraform destroy -auto-approve
+
+clean: ## Remove local generated dataset/snapshots/results
+	rm -rf dataset/output dataset/snapshots results
+
+# ─── advanced: individual orchestrator stages (operate on already-provisioned infra) ───
+
+seed: ## [stage] generate Synthea + load each server + snapshot
+	@orchestrator/orchestrate.sh seed
+
+run: ## [stage] run the matrix (servers x scenarios x reps) + write manifest
+	@orchestrator/orchestrate.sh run

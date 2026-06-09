@@ -39,11 +39,13 @@ case "$SCN" in
     export MAX_VUS="$(cfg "$W.max_vus")"
     SCRIPT="$HERE/saturation.js"
     if [[ "$CAPTURE" == "1" ]]; then
-      # MEASURED: the full ramp (start_rate -> max_rate), unchanged.
-      export START_RATE="$(cfg "$W.start_rate")"
-      export STEP_RATE="$(cfg "$W.step_rate")"
-      export STEP_DURATION="$(cfg "$W.step_duration")"
-      export MAX_RATE="$(cfg "$W.max_rate")"
+      # MEASURED: the ramp (start_rate -> max_rate). Env-overridable (env > config) so a
+      # smoke run can truncate it (e.g. MAX_RATE=300 STEP_DURATION=5s) without touching
+      # bench.config.yaml; benchmark uses the full config ramp.
+      export START_RATE="${START_RATE:-$(cfg "$W.start_rate")}"
+      export STEP_RATE="${STEP_RATE:-$(cfg "$W.step_rate")}"
+      export STEP_DURATION="${STEP_DURATION:-$(cfg "$W.step_duration")}"
+      export MAX_RATE="${MAX_RATE:-$(cfg "$W.max_rate")}"
     else
       # WARM-UP: a short CONSTANT load at the start rate — warms JIT/cache/pools
       # without re-running (and discarding) the entire ramp. Re-running the full

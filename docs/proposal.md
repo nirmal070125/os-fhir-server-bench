@@ -296,9 +296,9 @@ $EDITOR bench.config.yaml                      # region, sizes, which servers, d
 ```
 
 `reproduce.sh` is just a thin wrapper over discrete, independently-runnable scripts
-(`make infra-up`, `make seed`, `make run`, `make report`, `make infra-down`) so anyone can
+(`make provision`, `make seed`, `make run`, `make report`, `make teardown`) so anyone can
 also step through it stage by stage or re-run a single stage. Terraform makes the Azure
-infra reproducible and disposable; `infra-down` (and a CI always-run teardown step) prevents
+infra reproducible and disposable; `teardown` (and a CI always-run teardown step) prevents
 orphaned VMs from burning the reproducer's credits.
 
 ### Reproducibility guarantees baked in

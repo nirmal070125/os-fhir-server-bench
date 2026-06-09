@@ -3,7 +3,7 @@
 # identity (no secrets, no az CLI — just IMDS + the ARM REST API + curl/jq). Called by
 # a detached run after the report uploads, when azure.auto_stop_when_done is true.
 # Deallocate stops COMPUTE billing immediately; disks/IPs remain (cheap) until
-# `make infra-down`. Deallocates the loadgen (self) LAST so the other requests land first.
+# `make teardown`. Deallocates the loadgen (self) LAST so the other requests land first.
 # Env: BENCH_SUB (subscription id), BENCH_RG (resource group).
 set -uo pipefail
 : "${BENCH_SUB:?}"; : "${BENCH_RG:?}"
@@ -24,4 +24,4 @@ vms="$(curl -s -H "Authorization: Bearer $tok" "$base?api-version=$API" | jq -r 
 deallocate() { echo "self-stop: deallocating $1"; curl -s -X POST -H "Authorization: Bearer $tok" "$base/$1/deallocate?api-version=$API" >/dev/null; }
 for vm in $vms; do [[ "$vm" == "$self" ]] && continue; deallocate "$vm"; done
 deallocate "$self"   # last — this stops the VM we're running on
-echo "self-stop: deallocation requested for all VMs in $BENCH_RG (report is in Blob; 'make infra-down' to fully remove)"
+echo "self-stop: deallocation requested for all VMs in $BENCH_RG (report is in Blob; 'make teardown' to fully remove)"

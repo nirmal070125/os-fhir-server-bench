@@ -5,7 +5,7 @@
 # (build/up/snapshot/restore) to the SUT over the private network — one ssh
 # direction, one ephemeral key (added to the SUT, never your personal key on a VM).
 #
-# Assumes infra is already up (run `make infra-up` first, or ./reproduce.sh path).
+# Assumes infra is already up (run `make provision` first, or ./reproduce.sh path).
 # Tunables pass through from the env: SIZE / REPS / WARMUP_S / MEASURE_S / COOLDOWN_S
 # / SCENARIOS / SEED_CONCURRENCY (all optional; fall back to bench.config.yaml).
 #   orchestrator/run-detached.sh
@@ -54,7 +54,7 @@ ssh $OPTS "$USER@$loadgen_ip" "chmod 600 ~/.ssh/bench_ctrl && (command -v tmux >
 # --- storage SAS so the run publishes its report to Blob (no az needed on the VM) ---
 # The operator (you) has az; mint a short-lived container write-SAS for the upload and
 # a 7-day read URL for report.md to view later in a browser. All non-fatal: if it
-# can't be set up, the run still keeps the report on the VM (use `make fetch-results`).
+# can't be set up, the run still keeps the report on the VM (use `make report`).
 acct="$(echo "$out" | yq -r '.storage_account.value // ""')"
 container="$(echo "$out" | yq -r '.blob_container.value // ""')"
 prefix="run-$(date -u '+%Y%m%d-%H%M%S')"
@@ -69,7 +69,7 @@ if [[ -n "$acct" && -n "$container" ]] && command -v az >/dev/null 2>&1; then
     report_view="$(az storage blob generate-sas --account-name "$acct" --account-key "$key" -c "$container" -n "$prefix/report.md" --permissions r --https-only --full-uri --expiry "$rexp" -o tsv 2>/dev/null || true)"
   fi
 fi
-[[ -z "$upload_url" ]] && echo "NOTE: Blob SAS unavailable — report will stay on the VM; use 'make fetch-results'." >&2
+[[ -z "$upload_url" ]] && echo "NOTE: Blob SAS unavailable — report will stay on the VM; use 'make report'." >&2
 
 # --- write a self-contained launch script to the VM, run it in tmux ---------------
 # Generating a file (vs a deeply-nested ssh/tmux command) avoids quoting hell with the
@@ -85,7 +85,8 @@ if [[ "$(cfg azure.auto_stop_when_done 2>/dev/null)" == "true" ]]; then
 fi
 exports="export REMOTE=1 LOADGEN_LOCAL=1 SUT_SSH='$USER@$sut_priv' SUT_REPO='$REPO' SUT_PRIVATE_HOST='$sut_priv'
 export SSH_OPTS='-i /home/$USER/.ssh/bench_ctrl -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'"
-for v in SIZE REPS WARMUP_S MEASURE_S COOLDOWN_S SCENARIOS SEED_CONCURRENCY; do
+for v in SIZE REPS WARMUP_S MEASURE_S COOLDOWN_S SCENARIOS SEED_CONCURRENCY \
+         START_RATE STEP_RATE STEP_DURATION MAX_RATE; do
   [[ -n "${!v:-}" ]] && exports+="
 export $v='${!v}'"
 done
@@ -132,15 +133,15 @@ if [[ -n "$report_view" ]]; then cat <<EOF
 
 EOF
 else cat <<EOF
-    (Blob publishing unavailable — fetch with 'make fetch-results' from your laptop.)
+    (Blob publishing unavailable — fetch with 'make report' from your laptop.)
 
 EOF
 fi
 cat <<EOF
     Optional, from your laptop:
-      make run-status     # progress / DONE
-      make fetch-results  # also pull results locally
+      make status     # progress / DONE
+      make report  # also pull results locally
       ssh $OPTS $USER@$loadgen_ip -t 'tmux attach -t bench'   # watch live
 
-    When you've seen the report:  make infra-down   (stops billing)
+    When you've seen the report:  make teardown   (stops billing)
 EOF
