@@ -65,7 +65,8 @@ loadgen_run() {
 pull_results() { # <repo-relative-path>
   [[ "$REMOTE" == "1" && "${LOADGEN_LOCAL:-0}" != "1" ]] || return 0
   mkdir -p "$ROOT/$(dirname "$1")"
-  scp $SSH_OPTS -q -r "$LOADGEN_SSH:$LOADGEN_REPO/$1" "$ROOT/$(dirname "$1")/"
+  scp $SSH_OPTS -q -r "$LOADGEN_SSH:$LOADGEN_REPO/$1" "$ROOT/$(dirname "$1")/" \
+    || echo "WARN: could not pull $1 (continuing)" >&2
 }
 
 # --- per-server helpers ----------------------------------------------------
@@ -150,8 +151,16 @@ run_rep() {
   log "  rep $rep: restore -> warm-up ${WARMUP_S}s (discard) -> measure ${MEASURE_S}s (capture)"
   sut_run "$(db_env_prefix "$server")dataset/restore_${engine}.sh '$snap' >/dev/null"
   sut_wait_ready "$server"
-  loadgen_run "CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'"
-  loadgen_run "CAPTURE=1 OUTDIR='$outdir' scenarios/run.sh '$scenario' '$target' '${MEASURE_S}s'"
+  loadgen_run "CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'" || true
+  # saturation is DESIGNED to abort at the latency breakpoint (k6 exits non-zero) —
+  # that's its successful outcome, not a failure. Tolerate it; fail other scenarios.
+  if ! loadgen_run "CAPTURE=1 OUTDIR='$outdir' scenarios/run.sh '$scenario' '$target' '${MEASURE_S}s'"; then
+    if [[ "$scenario" == "saturation" ]]; then
+      log "  saturation reached its latency breakpoint and stopped (expected)"
+    else
+      echo "ERROR: $scenario measurement failed" >&2; return 1
+    fi
+  fi
   # Pull ONLY the small summary.json to the operator (that's all report.py needs).
   # The raw per-point metrics.json can be GBs (saturation/high throughput) and stays
   # on the loadgen VM — archived to Blob if configured, discarded on teardown.

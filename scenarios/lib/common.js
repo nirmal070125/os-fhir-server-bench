@@ -102,11 +102,17 @@ export function rampingArrival(name) {
 export const SUMMARY_TREND_STATS = ['avg', 'min', 'med', 'p(50)', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)', 'max'];
 
 // ---- thresholds -----------------------------------------------------------
-// abort=true (saturation) stops the test the moment the SLO is breached.
+// For saturation (abort=true) the breakpoint is driven by LATENCY (p99): the
+// knee where the server stops keeping up is the real "max sustainable throughput"
+// signal. We deliberately do NOT abort on http_req_failed: it's a *cumulative*
+// rate, so a single transient connection reset early in the ramp (~1/500 reqs =
+// 0.2%) would falsely trip the 0.1% SLO and abort at a bogus rate. The error rate
+// is still measured and thresholded (so it shows in the report / fails the SLO
+// line), just not used to abort the ramp.
 export function thresholds(abort = false) {
   return {
-    http_req_duration: [{ threshold: `p(99)<${P99_MS}`, abortOnFail: abort, delayAbortEval: '10s' }],
-    http_req_failed: [{ threshold: `rate<${MAX_ERROR_RATE}`, abortOnFail: abort, delayAbortEval: '10s' }],
+    http_req_duration: [{ threshold: `p(99)<${P99_MS}`, abortOnFail: abort, delayAbortEval: '15s' }],
+    http_req_failed: [`rate<${MAX_ERROR_RATE}`],
     fhir_errors: [`rate<${MAX_ERROR_RATE}`],
   };
 }
