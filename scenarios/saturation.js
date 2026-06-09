@@ -5,13 +5,18 @@
 // DB state unchanged across the ramp).
 import http from 'k6/http';
 import {
-  BASE, JSON_HEADERS, rampingArrival, thresholds, record,
+  BASE, JSON_HEADERS, constantArrival, rampingArrival, thresholds, record,
   collectIds, randItem, summary, SUMMARY_TREND_STATS,
 } from './lib/common.js';
 
+// WARMUP=1 (set by run.sh for the discarded warm-up pass) runs a short CONSTANT
+// load at the start rate instead of the full ramp — enough to warm JIT/cache/pools,
+// without the cost of running the entire ramp twice. The measured pass (no WARMUP)
+// is the real ramp with SLO abort, unchanged.
+const WARMUP = !!__ENV.WARMUP;
 export const options = {
-  scenarios: rampingArrival('saturation'),
-  thresholds: thresholds(true), // abort the moment p99 or error-rate SLO breaks
+  scenarios: WARMUP ? constantArrival('saturation_warmup') : rampingArrival('saturation'),
+  thresholds: WARMUP ? {} : thresholds(true), // no abort during warm-up
   summaryTrendStats: SUMMARY_TREND_STATS,
 };
 

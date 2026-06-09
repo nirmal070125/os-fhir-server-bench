@@ -20,6 +20,10 @@ export BASE_URL
 export P99_MS="$(cfg slo.p99_ms)"
 export MAX_ERROR_RATE="$(cfg slo.max_error_rate)"
 
+# CAPTURE=0 (warm-up, discarded) vs 1 (measured). Resolved early because saturation
+# warms up differently from how it measures (see below).
+CAPTURE="${CAPTURE:-1}"
+
 W="workload.\"$SCN\""
 case "$SCN" in
   read-mix|ingest)
@@ -30,21 +34,30 @@ case "$SCN" in
     SCRIPT="$HERE/$SCN.js"
     ;;
   saturation)
-    export START_RATE="$(cfg "$W.start_rate")"
-    export STEP_RATE="$(cfg "$W.step_rate")"
-    export STEP_DURATION="$(cfg "$W.step_duration")"
-    export MAX_RATE="$(cfg "$W.max_rate")"
     export PREALLOCATED_VUS="$(cfg "$W.preallocated_vus")"
     export MAX_VUS="$(cfg "$W.max_vus")"
     SCRIPT="$HERE/saturation.js"
+    if [[ "$CAPTURE" == "1" ]]; then
+      # MEASURED: the full ramp (start_rate -> max_rate), unchanged.
+      export START_RATE="$(cfg "$W.start_rate")"
+      export STEP_RATE="$(cfg "$W.step_rate")"
+      export STEP_DURATION="$(cfg "$W.step_duration")"
+      export MAX_RATE="$(cfg "$W.max_rate")"
+    else
+      # WARM-UP: a short CONSTANT load at the start rate — warms JIT/cache/pools
+      # without re-running (and discarding) the entire ramp. Re-running the full
+      # 20-min ramp as warm-up was ~1h of pure waste across reps; the measured ramp
+      # is identical either way, so this changes timing only, not the result.
+      export WARMUP=1
+      export RATE="$(cfg "$W.start_rate")"
+      export DURATION="${DURATION:-90s}"
+    fi
     ;;
   *) echo "unknown scenario: $SCN (read-mix|ingest|saturation)"; exit 1 ;;
 esac
 
-# OUTDIR + CAPTURE let the orchestrator place output and distinguish a discarded
-# warm-up (CAPTURE=0 → no metrics written) from a captured measurement (CAPTURE=1).
+# OUTDIR lets the orchestrator place captured output.
 OUTDIR="${OUTDIR:-$ROOT/results/$SCN}"
-CAPTURE="${CAPTURE:-1}"
 mkdir -p "$OUTDIR"
 
 echo "==> k6 $SCN -> $BASE_URL (p99<${P99_MS}ms, err<${MAX_ERROR_RATE}, capture=$CAPTURE)"
