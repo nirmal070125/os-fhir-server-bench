@@ -37,7 +37,7 @@ dataset:
   reference_date: "20240101"             # pins Synthea's "now" so ages are deterministic
   size: medium                           # small | medium | large (headline runs use large)
   populations:                           # number of Synthea patients per tier
-    small: 1000
+    small: 100                            # smoke/validation tier — fast end-to-end
     medium: 10000
     large: 100000
 
