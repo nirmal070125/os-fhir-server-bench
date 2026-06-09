@@ -18,6 +18,12 @@ azure:
     enabled: true
     time: "2000"                         # HHmm, local to `timezone`
     timezone: "UTC"
+  # When true, a detached run (make run-detached) deallocates ALL VMs right after it
+  # uploads the report — compute billing stops with no laptop needed; the report is
+  # safe in Blob; disks/IPs remain (cheap) until `make infra-down`. Uses a managed
+  # identity on the loadgen (no secrets). REQUIRES Owner/User-Access-Admin to create
+  # the role assignment at infra-up; leave false if you only have Contributor.
+  auto_stop_when_done: false
   admin_username: benchadmin
   ssh_public_key_path: ~/.ssh/id_rsa.pub
   # SECURITY: lock SSH to your IP. Set to "<your.ip>/32"; leaving 0.0.0.0/0 opens SSH to the world.

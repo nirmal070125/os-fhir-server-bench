@@ -76,6 +76,13 @@ fi
 # SAS token. orchestrate -> report -> upload, all logged to run.log; run.done at the end.
 upload_line=":"
 [[ -n "$upload_url" ]] && upload_line="reporting/upload-sas.sh \"$upload_url\" \"$prefix\" || true"
+# Auto-stop: after the report uploads, the loadgen deallocates all VMs via its managed
+# identity (config azure.auto_stop_when_done + the Owner-only role assignment).
+stop_line=":"
+if [[ "$(cfg azure.auto_stop_when_done 2>/dev/null)" == "true" ]]; then
+  stop_line="BENCH_SUB='$(az account show --query id -o tsv 2>/dev/null)' BENCH_RG='$(cfg azure.resource_group)' orchestrator/self-stop.sh"
+  echo "==> auto-stop ON: VMs will deallocate after the report uploads"
+fi
 exports="export REMOTE=1 LOADGEN_LOCAL=1 SUT_SSH='$USER@$sut_priv' SUT_REPO='$REPO' SUT_PRIVATE_HOST='$sut_priv'
 export SSH_OPTS='-i /home/$USER/.ssh/bench_ctrl -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'"
 for v in SIZE REPS WARMUP_S MEASURE_S COOLDOWN_S SCENARIOS SEED_CONCURRENCY; do
@@ -95,6 +102,8 @@ $exports
   $upload_line
 } > run.log 2>&1
 touch run.done
+# self-stop runs last (it deallocates this very VM); report is already in Blob.
+{ $stop_line ; } >> run.log 2>&1 || true
 LAUNCH
 scp $OPTS -q "$launch" "$USER@$loadgen_ip:$REPO/.detached-run.sh"
 rm -f "$launch"
