@@ -27,3 +27,7 @@ dataset/*.jar
 # Remote-run wiring (generated from Terraform outputs)
 .remote.env
 .detached.env
+
+# Python bytecode cache
+__pycache__/
+*.pyc
