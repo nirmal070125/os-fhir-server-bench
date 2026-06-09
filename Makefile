@@ -14,7 +14,8 @@ help: ## Show this help
 check: ## Validate config + credentials before spending anything
 	@bin/preflight.sh
 
-infra-up: ## Provision Azure VMs + network + storage (Terraform)
+infra-up: ## Provision Azure VMs + network + storage (Terraform); auto-locks SSH to your IP
+	@bin/lock-ssh-ip.sh
 	cd $(INFRA) && terraform init -input=false && terraform apply -auto-approve
 
 infra-down: ## Destroy all Azure resources (run this when done!)
@@ -47,9 +48,7 @@ fetch-results: ## Pull ONLY summaries + manifests from the loadgen VM and build 
 	  ssh $$SSH_OPTS "$$ADMIN@$$LOADGEN_IP" "cd $$REPO && tar czf - \$$(find results \( -name summary.json -o -name run-manifest.json \) -print)" | tar xzf - && \
 	  python3 reporting/report.py
 
-validate-small: ## Fast Azure smoke: small dataset, 1 rep, short windows, SSH locked to your IP, VMs kept up
-	@MYIP=$$(curl -fsS ifconfig.me) || { echo "could not detect public IP"; exit 1; }; \
-	  perl -i -pe "s#^(\s*allowed_ssh_cidr:).*#\1 \"$$MYIP/32\"#" bench.config.yaml; \
-	  echo "==> validate-small: SSH locked to $$MYIP/32; size=small, 1 rep, 15s warm-up / 30s measure; KEEP_INFRA=1"; \
-	  echo "    (size/reps/windows are env overrides for THIS run only — your committed config is untouched)"; \
-	  SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 KEEP_INFRA=1 ./reproduce.sh
+validate-small: ## Fast Azure smoke: small dataset, 1 rep, short windows, VMs kept up (SSH IP auto-locked at infra-up)
+	@echo "==> validate-small: size=small, 1 rep, 15s warm-up / 30s measure; KEEP_INFRA=1"
+	@echo "    (size/reps/windows are env overrides for THIS run only; SSH IP auto-locks at infra-up)"
+	@SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 KEEP_INFRA=1 ./reproduce.sh
