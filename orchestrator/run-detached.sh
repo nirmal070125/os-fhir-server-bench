@@ -101,7 +101,7 @@ $exports
   echo \$? > run.exit
   python3 reporting/report.py || true
   $upload_line
-} > run.log 2>&1
+} 2>&1 | tee run.log
 touch run.done
 # self-stop runs last (it deallocates this very VM); report is already in Blob.
 { $stop_line ; } >> run.log 2>&1 || true
@@ -138,10 +138,11 @@ else cat <<EOF
 EOF
 fi
 cat <<EOF
-    Optional, from your laptop:
-      make status     # progress / DONE
-      make report  # also pull results locally
-      ssh $OPTS $USER@$loadgen_ip -t 'tmux attach -t bench'   # watch live
+    Watch / manage, from your laptop:
+      make status                                                  # latest log + DONE
+      ssh $OPTS $USER@$loadgen_ip 'tail -f $REPO/run.log'          # live stream
+      ssh $OPTS $USER@$loadgen_ip -t 'tmux attach -t bench'        # live (Ctrl-b d to detach)
+      make report                                                  # pull results + show locally
 
     When you've seen the report:  make teardown   (stops billing)
 EOF
