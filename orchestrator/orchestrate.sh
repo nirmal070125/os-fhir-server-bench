@@ -148,7 +148,13 @@ phase_seed() {
   # own config copy otherwise). snapshot/restore take an explicit path, so they don't.
   loadgen_run "[ -d dataset/output/$SIZE/fhir ] || SIZE=$SIZE dataset/generate.sh"
   start_server "$server"
+  # Seed-only durability relaxation: fsync-per-commit on large bundles makes the load
+  # disk-bound (a ~24h seed on Azure Premium). synchronous_commit=off removes the wait;
+  # reset to default (on) right after, BEFORE the snapshot, so a snapshot always implies
+  # normal durability — measured runs restore from it and are unaffected. (postgres only.)
+  [[ "$engine" == "postgres" ]] && sut_run "$(db_env_prefix "$server")dataset/seed_tune_postgres.sh off"
   loadgen_run "SIZE=$SIZE dataset/seed.sh '$(k6_target_base "$server")'"
+  [[ "$engine" == "postgres" ]] && sut_run "$(db_env_prefix "$server")dataset/seed_tune_postgres.sh on"
   sut_run "mkdir -p '$SNAP_DIR' && $(db_env_prefix "$server")dataset/snapshot_${engine}.sh '$snap'"
 }
 
