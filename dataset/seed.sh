@@ -56,10 +56,15 @@ for f in "$DIR"/hospitalInformation*.json "$DIR"/practitionerInformation*.json; 
   bash -c "$WORKER" _ "$f" | tee -a "$RESULTS"
 done
 
-echo "==> Seeding patient bundles — $CONC parallel workers"
+total="$(find "$DIR" -name '*.json' ! -name 'hospitalInformation*' ! -name 'practitionerInformation*' | wc -l | tr -d ' ')"
+echo "==> Seeding $total patient bundles — $CONC parallel workers (progress every 25)"
+# Stream worker results to $RESULTS (for the summary) AND print a running count, so a
+# big seed isn't a silent hour. awk flushes so progress shows live in run.log.
 find "$DIR" -name '*.json' \
   ! -name 'hospitalInformation*' ! -name 'practitionerInformation*' -print0 \
-  | xargs -0 -n1 -P "$CONC" bash -c "$WORKER" _ >> "$RESULTS"
+  | xargs -0 -n1 -P "$CONC" bash -c "$WORKER" _ \
+  | tee -a "$RESULTS" \
+  | awk -v t="$total" '{n++; if (n % 25 == 0 || n == t) {printf "  ... %d/%d bundles\n", n, t; fflush()}}'
 
 ok="$(grep -c '^OK' "$RESULTS" || true)"
 fail="$(grep -c '^FAIL' "$RESULTS" || true)"
