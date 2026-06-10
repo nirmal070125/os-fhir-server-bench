@@ -36,9 +36,10 @@ report: ## Pull latest results from the loadgen + build report.md locally (use t
 check: ## Preflight: tools, Azure auth, config — provisions nothing
 	@bin/preflight.sh
 
-provision: ## Create the Azure infra (idempotent); auto-locks SSH to your current IP
+provision: ## Create the Azure infra (idempotent); auto-locks SSH to your IP; restarts stopped VMs
 	@bin/lock-ssh-ip.sh
 	cd $(INFRA) && terraform init -input=false && terraform apply -auto-approve
+	@bin/start-vms.sh   # terraform won't restart deallocated VMs — do it so reruns work after auto-stop
 
 teardown: ## Destroy all Azure resources — stop billing (run when done)
 	cd $(INFRA) && terraform destroy -auto-approve
