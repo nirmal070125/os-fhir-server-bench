@@ -13,7 +13,7 @@ azure:
     sut: Standard_D8s_v5                  # System-Under-Test host (8 vCPU / 32 GB)
     loadgen: Standard_D8s_v5             # load generator — must out-class the SUT
     obs: Standard_D4s_v5                 # Prometheus + Grafana (4 vCPU / 16 GB)
-  spot_enabled: true                     # loadgen + obs on Spot (cheap); SUT always regular
+  spot_enabled: true                     # obs only on Spot (cheap); SUT + loadgen always Regular (loadgen runs the controller — a Spot eviction would silently kill the run)
   auto_shutdown:                         # backstop against forgotten, billing VMs
     enabled: true
     time: "2000"                         # HHmm, local to `timezone`

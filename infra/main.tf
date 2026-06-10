@@ -3,8 +3,12 @@ locals {
   cfg         = yamldecode(file("${path.module}/../bench.config.yaml"))
   name_prefix = "fhirbench"
 
-  # The three roles. SUT is NEVER Spot (eviction mid-measurement would corrupt a
-  # result); load-gen + observability follow the spot_enabled toggle.
+  # The three roles. SUT and LOADGEN are NEVER Spot: the SUT because eviction
+  # mid-measurement would corrupt a result, the loadgen because it runs the whole
+  # controller (generate/seed/k6 + the ssh leg to the SUT) — a Spot eviction there
+  # deallocates the VM and silently kills the entire run mid-flight (which is exactly
+  # what happened: the loadgen was evicted during seeding and the run froze). Only obs
+  # (Grafana/Prometheus, non-critical to the result) follows the spot_enabled toggle.
   nodes = {
     sut = {
       size       = local.cfg.azure.vm_sizes.sut
@@ -14,7 +18,7 @@ locals {
     }
     loadgen = {
       size       = local.cfg.azure.vm_sizes.loadgen
-      spot       = local.cfg.azure.spot_enabled
+      spot       = false # controller host — must not be evictable
       cloud_init = "loadgen.yaml"
       disk_gb    = 64
     }
