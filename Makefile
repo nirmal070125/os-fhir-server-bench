@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 INFRA := infra
 
-.PHONY: help check provision teardown clean smoke benchmark status report seed run
+.PHONY: help check provision teardown clean clean-blob smoke benchmark status report seed run
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -25,11 +25,14 @@ status: ## Show the in-flight run's progress (log tail / DONE)
 	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit $$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
 	  || echo "no detached run found (.detached.env missing — run 'make smoke' or 'make benchmark')"
 
-report: ## Pull latest results from the loadgen + build report.md locally (use the Blob URL after auto-stop)
-	@set -a; . ./.detached.env 2>/dev/null; set +a; \
-	  echo "==> fetching summaries + manifests (not the multi-GB raw metrics.json)"; \
-	  ssh $$SSH_OPTS "$$ADMIN@$$LOADGEN_IP" "cd $$REPO && tar czf - \$$(find results \( -name summary.json -o -name run-manifest.json \) -print)" | tar xzf - && \
-	  python3 reporting/report.py
+report: ## Show the latest run's report + run log from Blob (works after auto-stop; pass a run-… prefix to pick one)
+	@bin/fetch-report.sh $(RUN)
+
+clean-blob: ## Delete ALL run results from the Blob container (start fresh)
+	@ACCT=$$(cd $(INFRA) && terraform output -raw storage_account); \
+	  az storage blob delete-batch --account-name "$$ACCT" \
+	    --account-key "$$(az storage account keys list -g $$(bin/cfg azure.resource_group) -n $$ACCT --query '[0].value' -o tsv)" \
+	    --source "$$(bin/cfg reporting.blob_container)" && echo "cleared Blob container"
 
 # ─── setup & lifecycle ───
 

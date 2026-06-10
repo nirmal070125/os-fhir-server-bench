@@ -100,10 +100,12 @@ $exports
   orchestrator/orchestrate.sh all
   echo \$? > run.exit
   python3 reporting/report.py || true
-  $upload_line
 } 2>&1 | tee run.log
 touch run.done
-# self-stop runs last (it deallocates this very VM); report is already in Blob.
+# Upload AFTER the block so run.log is complete — and it runs even if the run failed,
+# so the full log is always in Blob (upload-sas uploads run.log + report + summaries).
+$upload_line
+# self-stop runs last (it deallocates this very VM); log + report are already in Blob.
 { $stop_line ; } >> run.log 2>&1 || true
 LAUNCH
 scp $OPTS -q "$launch" "$USER@$loadgen_ip:$REPO/.detached-run.sh"
