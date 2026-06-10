@@ -115,6 +115,16 @@ stop_server() {
   sut_run "servers/$1/down.sh -v"
 }
 
+# Restart just the app container (service "server", same in every profile). A
+# Postgres restore drops/recreates the schema underneath a running server; pooled/
+# cached servers (HAPI, Medplum, IBM) keep stale connections + cached metadata and
+# then return 0 results. Restarting after a restore gives them fresh connections
+# against the restored data. fhir-server-go doesn't need it (pgx reconnects), but a
+# ~5s restart is harmless; the warm-up that follows absorbs the cold start.
+restart_app() { # <server>
+  sut_run "cd servers/$1 && { [ -f .env ] && docker compose --env-file .env restart server || docker compose restart server; }"
+}
+
 # Wait (on the SUT) for the server to be ready — needed after a rocksdb restart;
 # a no-op once the server is already up.
 sut_wait_ready() {
@@ -150,6 +160,10 @@ run_rep() {
   outdir="results/$server/$scenario/rep-$rep"; target="$(k6_target_base "$server")"
   log "  rep $rep: restore -> warm-up ${WARMUP_S}s (discard) -> measure ${MEASURE_S}s (capture)"
   sut_run "$(db_env_prefix "$server")dataset/restore_${engine}.sh '$snap' >/dev/null"
+  # postgres restore swaps the schema under a live server -> restart so pooled/cached
+  # servers (HAPI, Medplum, IBM) see the restored data. (rocksdb/mssql restore handle
+  # their own container lifecycle.)
+  [[ "$engine" == "postgres" ]] && restart_app "$server"
   sut_wait_ready "$server"
   loadgen_run "CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'" || true
   # saturation is DESIGNED to abort at the latency breakpoint (k6 exits non-zero) —
