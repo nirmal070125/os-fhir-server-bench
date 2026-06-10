@@ -14,7 +14,12 @@ locals {
       size       = local.cfg.azure.vm_sizes.sut
       spot       = false
       cloud_init = "sut.yaml"
-      disk_gb    = 256 # dataset + per-engine snapshots live here
+      # 1024 GB = Premium P30 = 5,000 IOPS / 200 MB/s. Premium IOPS scale with disk
+      # SIZE, and the SUT's DB is IOPS-bound (random index writes), not space-bound —
+      # P15 (256 GB / 1,100 IOPS) bottlenecked both the seed AND the measured write
+      # numbers, so the result reflected the disk, not the server. P30 makes the server
+      # the limit. (Holds the dataset + per-engine snapshots too, with room to spare.)
+      disk_gb = 1024
     }
     loadgen = {
       size       = local.cfg.azure.vm_sizes.loadgen
