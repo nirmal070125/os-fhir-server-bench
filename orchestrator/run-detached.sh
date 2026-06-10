@@ -12,6 +12,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 cfg() { bin/cfg "$1"; }
+# Load .env for optional BENCH_NOTIFY_URL / BENCH_NOTIFY_KIND (webhook notification).
+[[ -f .env ]] && { set -a; . ./.env; set +a; }
 
 USER="$(cfg azure.admin_username)"
 KEY_PUB="$(cfg azure.ssh_public_key_path)"; KEY_PUB="${KEY_PUB/#\~/$HOME}"; KEY="${KEY_PUB%.pub}"
@@ -67,8 +69,10 @@ if [[ -n "$acct" && -n "$container" ]] && command -v az >/dev/null 2>&1; then
     wsas="$(az storage container generate-sas --account-name "$acct" --account-key "$key" -n "$container" --permissions cw --https-only --expiry "$wexp" -o tsv 2>/dev/null || true)"
     [[ -n "$wsas" ]] && upload_url="https://$acct.blob.core.windows.net/$container?$wsas"
     report_view="$(az storage blob generate-sas --account-name "$acct" --account-key "$key" -c "$container" -n "$prefix/report.md" --permissions r --https-only --full-uri --expiry "$rexp" -o tsv 2>/dev/null || true)"
+    log_view="$(az storage blob generate-sas --account-name "$acct" --account-key "$key" -c "$container" -n "$prefix/run.log" --permissions r --https-only --full-uri --expiry "$rexp" -o tsv 2>/dev/null || true)"
   fi
 fi
+log_view="${log_view:-}"
 [[ -z "$upload_url" ]] && echo "NOTE: Blob SAS unavailable — report will stay on the VM; use 'make report'." >&2
 
 # --- write a self-contained launch script to the VM, run it in tmux ---------------
@@ -82,6 +86,12 @@ stop_line=":"
 if [[ "$(cfg azure.auto_stop_when_done 2>/dev/null)" == "true" ]]; then
   stop_line="BENCH_SUB='$(az account show --query id -o tsv 2>/dev/null)' BENCH_RG='$(cfg azure.resource_group)' orchestrator/self-stop.sh"
   echo "==> auto-stop ON: VMs will deallocate after the report uploads"
+fi
+# Optional webhook notification when the run finishes (BENCH_NOTIFY_URL in .env).
+notify_line=":"
+if [[ -n "${BENCH_NOTIFY_URL:-}" ]]; then
+  notify_line="BENCH_NOTIFY_URL='$BENCH_NOTIFY_URL' BENCH_NOTIFY_KIND='${BENCH_NOTIFY_KIND:-slack}' BENCH_RUN_PREFIX='$prefix' BENCH_REPORT_URL='$report_view' BENCH_LOG_URL='$log_view' orchestrator/notify.sh"
+  echo "==> notify ON: will post to your webhook when the run finishes"
 fi
 exports="export REMOTE=1 LOADGEN_LOCAL=1 SUT_SSH='$USER@$sut_priv' SUT_REPO='$REPO' SUT_PRIVATE_HOST='$sut_priv'
 export SSH_OPTS='-i /home/$USER/.ssh/bench_ctrl -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'"
@@ -105,6 +115,8 @@ touch run.done
 # Upload AFTER the block so run.log is complete — and it runs even if the run failed,
 # so the full log is always in Blob (upload-sas uploads run.log + report + summaries).
 $upload_line
+# Notify (reads run.exit for pass/fail) once the report+log are in Blob.
+{ $notify_line ; } >> run.log 2>&1 || true
 # self-stop runs last (it deallocates this very VM); log + report are already in Blob.
 { $stop_line ; } >> run.log 2>&1 || true
 LAUNCH
