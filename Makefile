@@ -22,7 +22,7 @@ benchmark: provision ## The full run (bench.config.yaml: size, reps, windows, fu
 
 status: ## Show the in-flight run's progress (log tail / DONE)
 	@set -a; . ./.detached.env 2>/dev/null; set +a; \
-	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit $$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
+	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit \$$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
 	  || echo "no detached run found (.detached.env missing — run 'make smoke' or 'make benchmark')"
 
 report: ## Show the latest run's report + run log from Blob (works after auto-stop; pass a run-… prefix to pick one)
