@@ -80,6 +80,15 @@ log_view="${log_view:-}"
 # SAS token. orchestrate -> report -> upload, all logged to run.log; run.done at the end.
 upload_line=":"
 [[ -n "$upload_url" ]] && upload_line="reporting/upload-sas.sh \"$upload_url\" \"$prefix\" || true"
+# Heartbeat: while the run is in flight, push run.log (+ whatever results exist) to Blob
+# every 60s. Without this the blob appeared only at the very end — so a long run was a
+# blind wait and a HANG produced no blob at all. Now the blob exists within ~a minute and
+# the log updates live, so an in-progress or stuck run is diagnosable from your laptop.
+hb_start=":"; hb_stop=":"
+if [[ -n "$upload_url" ]]; then
+  hb_start="( while [ ! -f run.done ]; do reporting/upload-sas.sh \"$upload_url\" \"$prefix\" >/dev/null 2>&1 || true; sleep 60; done ) & HB_PID=\$!"
+  hb_stop="[[ -n \"\${HB_PID:-}\" ]] && kill \"\$HB_PID\" 2>/dev/null || true"
+fi
 # Auto-stop: after the report uploads, the loadgen deallocates all VMs via its managed
 # identity (config azure.auto_stop_when_done + the Owner-only role assignment).
 stop_line=":"
@@ -106,14 +115,18 @@ cat > "$launch" <<LAUNCH
 #!/usr/bin/env bash
 cd "$REPO"
 $exports
+: > run.log   # create immediately so the blob appears (and is watchable) within ~a minute
+# Start the live-log heartbeat BEFORE the run, stop it once run.done exists.
+$hb_start
 {
   orchestrator/orchestrate.sh all
   echo \$? > run.exit
   python3 reporting/report.py || true
-} 2>&1 | tee run.log
+} 2>&1 | tee -a run.log
 touch run.done
-# Upload AFTER the block so run.log is complete — and it runs even if the run failed,
-# so the full log is always in Blob (upload-sas uploads run.log + report + summaries).
+$hb_stop
+# Final authoritative upload AFTER the block so run.log is complete — runs even if the run
+# failed, so the full log is always in Blob (upload-sas uploads run.log + report + summaries).
 $upload_line
 # Notify (reads run.exit for pass/fail) once the report+log are in Blob.
 { $notify_line ; } >> run.log 2>&1 || true
@@ -144,8 +157,12 @@ EOF
 if [[ -n "$report_view" ]]; then cat <<EOF
     📊 Report (open in a browser once the run finishes, ~20-40 min — no laptop needed):
        $report_view
-
 EOF
+[[ -n "$log_view" ]] && cat <<EOF
+    📜 Live log (appears within ~a minute, refreshes every 60s — watch progress / diagnose):
+       $log_view
+EOF
+echo
 else cat <<EOF
     (Blob publishing unavailable — fetch with 'make report' from your laptop.)
 
