@@ -42,7 +42,9 @@ services:
     ports:
       - "${FSG_PORT}:9090"
     environment:
-      DATABASE_URL: postgres://${FSG_DB_USER}:${FSG_DB_PASSWORD}@db:5432/${FSG_DB_NAME}?sslmode=disable
+      # pool_max_conns=20 raises the server's pgx pool from its default (~max(4,NumCPU)≈8)
+      # so concurrent writes aren't queued behind a small pool. Honored by pgxpool.ParseConfig.
+      DATABASE_URL: postgres://${FSG_DB_USER}:${FSG_DB_PASSWORD}@db:5432/${FSG_DB_NAME}?sslmode=disable&pool_max_conns=20
       SERVER_PORT: "9090"
       BASE_URL: ${FSG_BASE_URL}
       LOG_LEVEL: ${FSG_LOG_LEVEL}
