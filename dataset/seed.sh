@@ -11,7 +11,7 @@
 #   e.g. dataset/seed.sh http://localhost:9090/fhir/r4
 #
 # Env:
-#   SEED_CONCURRENCY  parallel patient-bundle posts (default 8)
+#   SEED_CONCURRENCY  parallel patient-bundle posts (default 16)
 #   AUTH_HEADER       optional, e.g. 'Authorization: Bearer X' / 'Authorization: Basic Y'
 #                     for auth-required servers (Medplum, IBM). Empty = open server.
 #   TLS_INSECURE=1    accept self-signed TLS (IBM's Liberty default)
@@ -20,10 +20,13 @@ BASE="${1:?usage: seed.sh <fhir_base_url> [bundle_dir]}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIZE="${SIZE:-$("$ROOT/bin/cfg" dataset.size)}"
 DIR="${2:-$ROOT/dataset/output/$SIZE/fhir}"
-# Default 4: at 8, the two largest Synthea bundles intermittently fail mid-transaction
-# with "conn closed" (Postgres connection dropped under contention), which aborts the
-# whole run. 4 is reliable; raise it for speed on a beefy DB if seeding 0-fails for you.
-CONC="${SEED_CONCURRENCY:-4}"
+# Default 16. The old default of 4 dated from before the server's write timeout was
+# raised to 10m (which is what used to cause the largest bundles to drop with "conn
+# closed" at 8). Measured: 4 workers ≈ 0.59 bundles/s, 16 ≈ 0.85 (≈1.4×) and runs
+# clean. It saturates there — the wall is the SERVER's per-bundle processing time
+# (~13s for a 1.5 MB / ~1500-resource bundle, uncontended), not client concurrency —
+# so pushing past ~16 mostly adds contention. Raise only if your DB has headroom.
+CONC="${SEED_CONCURRENCY:-16}"
 
 export SEED_BASE="$BASE" AUTH_HEADER="${AUTH_HEADER:-}" TLS_INSECURE="${TLS_INSECURE:-0}"
 
