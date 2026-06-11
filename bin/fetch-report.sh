@@ -20,8 +20,19 @@ echo "==> run: $prefix   (others: $(printf '%s\n' "$names" | sed -E 's#/.*##' | 
 dest="results-blob/$prefix"; mkdir -p "$dest"
 get() { az storage blob download --account-name "$ACCT" --account-key "$KEY" -c "$CONT" -n "$prefix/$1" -f "$dest/$1" -o none 2>/dev/null; }
 
-get report.md && { echo; echo "===== report.md ====="; cat "$dest/report.md"; } \
-  || echo "(no report.md — the run likely failed before producing one; see run.log below)"
+if get report.md; then
+  echo; echo "===== report.md ====="; cat "$dest/report.md"
+else
+  # No report yet — distinguish IN PROGRESS from FAILED. run.exit is written (and
+  # uploaded) only after the run block finishes, so its absence means still running.
+  if get run.exit; then
+    ec="$(tr -d '[:space:]' < "$dest/run.exit")"
+    if [[ "$ec" == "0" ]]; then echo "(run finished (exit 0) but no report.md — see run.log below)"
+    else echo "(run FAILED — exit $ec, no report.md; see run.log below)"; fi
+  else
+    echo "(no report.md yet — run is still IN PROGRESS; the heartbeat log tail is below. Re-run 'make report' later.)"
+  fi
+fi
 echo; echo "===== run.log (tail) ====="
 get run.log && tail -50 "$dest/run.log" || echo "(no run.log uploaded)"
 echo; echo "(full files under $dest/)"
