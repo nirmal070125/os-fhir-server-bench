@@ -41,7 +41,9 @@ case "$cmd" in
     if (( sz > PUT_CAP_BYTES )); then
       echo "blobcache: $local_f is $((sz/1024/1024))MB > cap — skipping (needs chunked upload)" >&2; exit 0
     fi
-    if curl -fsS -X PUT -H "x-ms-blob-type: BlockBlob" --data-binary @"$local_f" "$base/$blob?$tok" >/dev/null 2>&1; then
+    # -T streams the file (Content-Length from its size); NEVER --data-binary @file, which
+    # loads the whole file into RAM and OOMs on multi-GB snapshots.
+    if curl -fsS -T "$local_f" -H "x-ms-blob-type: BlockBlob" "$base/$blob?$tok" >/dev/null 2>&1; then
       echo "blobcache: cached $blob ($((sz/1024/1024))MB)"
     else
       echo "blobcache: upload failed for $blob (non-fatal)" >&2
