@@ -134,19 +134,45 @@ sut_wait_ready() {
 
 # --- phases ----------------------------------------------------------------
 phase_seed() {
-  local server="$1" engine snap; engine="$(server_engine "$server")"; snap="$(snapshot_path "$server")"
+  local server="$1" engine snap commit skey dkey csas
+  engine="$(server_engine "$server")"; snap="$(snapshot_path "$server")"
+  csas="${BENCH_CACHE_SAS:-}"
+  # Cache keys: the snapshot depends on the server BUILD (commit) + dataset (size); the
+  # dataset depends only on the size name (= its deterministic identity, by convention —
+  # change the size name if you change generation params). See dataset/blobcache.sh.
+  commit="$(cfg "servers.$server.commit" 2>/dev/null | cut -c1-12)"; commit="${commit:-nocommit}"
+  skey="snapshots/${server}-${SIZE}-${commit}.dump"
+  dkey="datasets/${SIZE}.tar.gz"
+
   if sut_run "[ -f '$snap' ]" 2>/dev/null; then log "seed: snapshot exists ($snap) — skipping"; return; fi
+
+  # (1) Snapshot cached in Blob? Build the server image (measurement needs it) then pull
+  # the snapshot and SKIP generate + the ~hour-long seed entirely. Verify it landed
+  # non-empty; on any failure, fall through to a full seed.
+  if [[ -n "$csas" ]] && sut_run "BENCH_CACHE_SAS='$csas' dataset/blobcache.sh exists '$skey'" 2>/dev/null; then
+    log "seed: reusing cached snapshot from Blob ($skey) — building server, skipping seed"
+    [[ "${SKIP_BUILD:-0}" == "1" ]] || sut_run "servers/$server/build.sh"
+    if sut_run "mkdir -p '$SNAP_DIR' && BENCH_CACHE_SAS='$csas' dataset/blobcache.sh get '$skey' '$snap' && [ -s '$snap' ]"; then
+      log "seed: cached snapshot restored to $snap — seed phase skipped"; return
+    fi
+    log "seed: cached-snapshot pull failed — falling back to full seed"
+  fi
 
   log "seed: $server — generate+load (loadgen) -> snapshot (SUT)"
   # Seeding requires a CLEAN DB: the dataset uses a fixed seed, so resource IDs are
   # deterministic — re-seeding onto leftover data from a prior/interrupted run
   # collides and 500s. Wipe the server + its volume first (no-op if not present).
   sut_run "servers/$server/down.sh -v" >/dev/null 2>&1 || true
-  # generate + seed run on the loadgen (JDK + dataset live there); seed POSTs to the
-  # SUT's API over the private network. build/up + snapshot run on the SUT.
-  # SIZE=$SIZE is embedded so a SIZE override reaches the VM (it re-derives from its
-  # own config copy otherwise). snapshot/restore take an explicit path, so they don't.
-  loadgen_run "[ -d dataset/output/$SIZE/fhir ] || SIZE=$SIZE dataset/generate.sh"
+  # (2) Dataset cached in Blob? Pull + extract on the loadgen (skips ~min of generation);
+  # else generate and upload it for next time. generate + seed run on the loadgen (JDK +
+  # dataset live there); seed POSTs to the SUT's API over the private network.
+  if [[ -n "$csas" ]] && loadgen_run "BENCH_CACHE_SAS='$csas' dataset/blobcache.sh exists '$dkey'" 2>/dev/null; then
+    log "seed: reusing cached dataset from Blob ($dkey)"
+    loadgen_run "mkdir -p dataset/output/$SIZE && BENCH_CACHE_SAS='$csas' dataset/blobcache.sh get '$dkey' /tmp/bench-ds.tgz && tar xzf /tmp/bench-ds.tgz -C dataset/output/$SIZE && rm -f /tmp/bench-ds.tgz"
+  else
+    loadgen_run "[ -d dataset/output/$SIZE/fhir ] || SIZE=$SIZE dataset/generate.sh"
+    [[ -n "$csas" ]] && loadgen_run "tar czf /tmp/bench-ds.tgz -C dataset/output/$SIZE fhir && BENCH_CACHE_SAS='$csas' dataset/blobcache.sh put /tmp/bench-ds.tgz '$dkey'; rm -f /tmp/bench-ds.tgz" || true
+  fi
   start_server "$server"
   # Seed-only durability relaxation: fsync-per-commit on large bundles makes the load
   # disk-bound (a ~24h seed on Azure Premium). synchronous_commit=off removes the wait;
@@ -156,6 +182,8 @@ phase_seed() {
   loadgen_run "SIZE=$SIZE dataset/seed.sh '$(k6_target_base "$server")'"
   [[ "$engine" == "postgres" ]] && sut_run "$(db_env_prefix "$server")dataset/seed_tune_postgres.sh on"
   sut_run "mkdir -p '$SNAP_DIR' && $(db_env_prefix "$server")dataset/snapshot_${engine}.sh '$snap'"
+  # (3) Cache the freshly-built snapshot so future runs skip this entire phase.
+  [[ -n "$csas" ]] && sut_run "BENCH_CACHE_SAS='$csas' dataset/blobcache.sh put '$snap' '$skey'" || true
 }
 
 # One measured repetition: reset state (SUT) -> warm up (loadgen, discard) ->

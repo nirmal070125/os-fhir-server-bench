@@ -75,6 +75,17 @@ fi
 log_view="${log_view:-}"
 [[ -z "$upload_url" ]] && echo "NOTE: Blob SAS unavailable — report will stay on the VM; use 'make report'." >&2
 
+# --- cache SAS: lets the VMs reuse the dataset + seeded snapshot across runs ----------
+# A 30-day container SAS (read+create+write) so blobcache.sh can pull/push cache blobs
+# with curl. Non-fatal: if unavailable, the orchestrator just regenerates + re-seeds.
+cache_sas=""
+if [[ -n "$acct" && -n "$container" && -n "${key:-}" ]]; then
+  cexp="$(date -u -v+30d '+%Y-%m-%dT%H:%MZ' 2>/dev/null || date -u -d '+30 days' '+%Y-%m-%dT%H:%MZ')"
+  csas="$(az storage container generate-sas --account-name "$acct" --account-key "$key" -n "$container" --permissions rcw --https-only --expiry "$cexp" -o tsv 2>/dev/null || true)"
+  [[ -n "$csas" ]] && cache_sas="https://$acct.blob.core.windows.net/$container?$csas"
+fi
+[[ -n "$cache_sas" ]] && echo "==> dataset/snapshot cache ON (reuse across runs via Blob)"
+
 # --- write a self-contained launch script to the VM, run it in tmux ---------------
 # Generating a file (vs a deeply-nested ssh/tmux command) avoids quoting hell with the
 # SAS token. orchestrate -> report -> upload, all logged to run.log; run.done at the end.
@@ -104,6 +115,8 @@ if [[ -n "${BENCH_NOTIFY_URL:-}" ]]; then
 fi
 exports="export REMOTE=1 LOADGEN_LOCAL=1 SUT_SSH='$USER@$sut_priv' SUT_REPO='$REPO' SUT_PRIVATE_HOST='$sut_priv'
 export SSH_OPTS='-i /home/$USER/.ssh/bench_ctrl -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'"
+[[ -n "$cache_sas" ]] && exports+="
+export BENCH_CACHE_SAS='$cache_sas'"
 for v in SIZE REPS WARMUP_S MEASURE_S COOLDOWN_S SCENARIOS SEED_CONCURRENCY \
          START_RATE STEP_RATE STEP_DURATION MAX_RATE; do
   [[ -n "${!v:-}" ]] && exports+="
