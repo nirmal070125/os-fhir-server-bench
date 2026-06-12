@@ -44,9 +44,10 @@ dataset:
   synthea_version: "3.3.0"               # pinned for reproducibility
   seed: 1234                             # fixed RNG seed → byte-identical bundles
   reference_date: "20240101"             # pins Synthea's "now" so ages are deterministic
-  size: medium                           # small | medium | large (headline runs use large)
+  size: demo2k                           # small | demo2k | medium | large (headline runs use large)
   populations:                           # number of Synthea patients per tier
     small: 100                            # smoke/validation tier — fast end-to-end
+    demo2k: 2000                          # first full-pipeline run — real data, ~1.5-2.5h seed
     medium: 10000
     large: 100000
 
