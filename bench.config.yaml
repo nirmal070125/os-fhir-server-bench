@@ -44,11 +44,16 @@ dataset:
   synthea_version: "3.3.0"               # pinned for reproducibility
   seed: 1234                             # fixed RNG seed → byte-identical bundles
   reference_date: "20240101"             # pins Synthea's "now" so ages are deterministic
-  size: demo2k                           # small | demo2k | medium | large (headline runs use large)
+  # Export only the last N years of each patient's history (0 = full life). Trims the
+  # heavy tail: at 1yr the max bundle drops 64MB->7.4MB (~26k->3k resources) and total
+  # volume ~5.7x, with the SAME patient count — so we keep full breadth but no monster
+  # bundles that time out. Raise to 3 (max ~22MB) or 0 (full) for deeper headline runs.
+  years_of_history: 1
+  size: medium1y                         # small | medium1y | medium | large (headline runs use large)
   populations:                           # number of Synthea patients per tier
     small: 100                            # smoke/validation tier — fast end-to-end
-    demo2k: 2000                          # first full-pipeline run — real data, ~1.5-2.5h seed
-    medium: 10000
+    medium1y: 10000                       # 10k patients, 1yr history (years_of_history) — fast, no monster bundles
+    medium: 10000                         # 10k patients, full history (the ~13h / 64MB-bundle set)
     large: 100000
 
 # Pinned, enable/disable per server. Build/iterate with only fhir-server-go on;

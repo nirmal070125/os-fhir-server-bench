@@ -12,6 +12,7 @@ SEED="$(cfg dataset.seed)"
 REFDATE="$(cfg dataset.reference_date)"
 SIZE="${SIZE:-$(cfg dataset.size)}"
 POP="$(cfg "dataset.populations.${SIZE}")"
+YOH="$(cfg dataset.years_of_history 2>/dev/null || echo 0)"  # exported years/patient; 0 = full life
 
 OUT="${1:-$ROOT/dataset/output/$SIZE}"
 JAR="$ROOT/dataset/synthea-with-dependencies-${VERSION}.jar"
@@ -30,12 +31,13 @@ fi
 # leave its working locale untouched to avoid the invalid-C.UTF-8 case).
 if [[ "$(uname)" == "Linux" ]]; then export LANG=C.UTF-8 LC_ALL=C.UTF-8; fi
 
-echo "==> Generating $POP patients (seed=$SEED, refdate=$REFDATE, locale=${LC_ALL:-default}) → $OUT"
+echo "==> Generating $POP patients (seed=$SEED, refdate=$REFDATE, years_of_history=$YOH, locale=${LC_ALL:-default}) → $OUT"
 java -Dfile.encoding=UTF-8 -jar "$JAR" \
   -p "$POP" \
   -s "$SEED" \
   -cs "$SEED" \
   -r "$REFDATE" \
+  --exporter.years_of_history "$YOH" \
   --exporter.baseDirectory "$OUT" \
   --exporter.fhir.export true \
   --exporter.fhir.transaction_bundle true \
