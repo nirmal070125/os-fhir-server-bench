@@ -20,13 +20,15 @@ BASE="${1:?usage: seed.sh <fhir_base_url> [bundle_dir]}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIZE="${SIZE:-$("$ROOT/bin/cfg" dataset.size)}"
 DIR="${2:-$ROOT/dataset/output/$SIZE/fhir}"
-# Default 16. The old default of 4 dated from before the server's write timeout was
-# raised to 10m (which is what used to cause the largest bundles to drop with "conn
-# closed" at 8). Measured: 4 workers ≈ 0.59 bundles/s, 16 ≈ 0.85 (≈1.4×) and runs
-# clean. It saturates there — the wall is the SERVER's per-bundle processing time
-# (~13s for a 1.5 MB / ~1500-resource bundle, uncontended), not client concurrency —
-# so pushing past ~16 mostly adds contention. Raise only if your DB has headroom.
-CONC="${SEED_CONCURRENCY:-16}"
+# Default 4 = the SUT's vCPU count. Keep concurrency <= cores: each transaction bundle
+# is processed on ~one core, so with N cores, N bundles run truly in parallel and each
+# still gets a full core. OVER-subscribing starves the giant bundles — the dataset has a
+# long tail (median 2 MB but p90 11 MB, max 72 MB / ~40k resources), and a starved 72 MB
+# bundle blows past the server's write timeout, dropping the connection (CLIENT-ERR).
+# Measured the hard way: conc 16 gained only ~1.4× throughput (the wall is the server's
+# ~13s/bundle, not the client) but FAILED 80 of the largest bundles. So 4 is both reliable
+# AND near-optimal here; raise it only if SUT_CPUS goes up.
+CONC="${SEED_CONCURRENCY:-4}"
 
 export SEED_BASE="$BASE" AUTH_HEADER="${AUTH_HEADER:-}" TLS_INSECURE="${TLS_INSECURE:-0}"
 
