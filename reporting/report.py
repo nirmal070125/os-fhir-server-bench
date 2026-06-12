@@ -137,8 +137,12 @@ def main():
     md.append("# Benchmark report\n")
     ds = any_m.get("dataset", {})
     lim = any_m.get("limits", {})
+    seed_note = ""
+    if ds.get("bundles_total"):
+        ok_b, tot_b, fail_b = ds.get("bundles_ok", 0), ds["bundles_total"], ds.get("bundles_failed", 0)
+        seed_note = f" — {ok_b:,}/{tot_b:,} bundles loaded" + (f" ({fail_b:,} failed at seed, {ds.get('success_pct','?')}%)" if fail_b else " (all)")
     md.append(
-        f"- **Dataset:** {ds.get('size','?')} (hash `{str(ds.get('hash',''))[:12]}`)  \n"
+        f"- **Dataset:** {ds.get('size','?')} (hash `{str(ds.get('hash',''))[:12]}`){seed_note}  \n"
         f"- **Envelope (per server):** {lim.get('sut_cpus','?')} vCPU / {lim.get('sut_mem','?')} app, "
         f"{lim.get('db_cpus','?')} vCPU / {lim.get('db_mem','?')} db  \n"
         f"- **SLO:** error rate < {err_slo}; p99 < {p99_slo} ms (default/reads)"

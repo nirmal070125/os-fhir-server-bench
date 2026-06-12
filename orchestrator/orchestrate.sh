@@ -206,6 +206,12 @@ write_manifest() {
     slo_map+="\"$s\": $p, "
   done
   slo_map="${slo_map%, }"
+  # Seed outcome (bundles loaded vs failed) — written by seed.sh on the loadgen; fold it
+  # into the dataset object so the report records exactly how complete the dataset is.
+  local seed_json seed_fields=""
+  seed_json="$(loadgen_run "cat dataset/output/$SIZE/seed-summary.json 2>/dev/null" 2>/dev/null || true)"
+  seed_json="$(echo "$seed_json" | tr -d '\r\n' | grep -o '{.*}' || true)"
+  if [[ -n "$seed_json" ]]; then seed_fields=", ${seed_json#\{}"; seed_fields="${seed_fields%\}}"; fi
   mkdir -p "$(dirname "$out")"
   {
     echo '{'
@@ -217,7 +223,7 @@ write_manifest() {
     echo "  \"host\": { \"sut_nproc\": \"$nproc\" },"
     echo "  \"pin\": { \"repo\": \"$(cfg "servers.$server.repo" 2>/dev/null || echo n/a)\", \"ref\": \"$(cfg "servers.$server.ref" 2>/dev/null || echo n/a)\", \"commit\": \"$(cfg "servers.$server.commit" 2>/dev/null || echo n/a)\" },"
     echo "  \"limits\": { \"sut_cpus\": $(cfg limits.sut_cpus), \"sut_mem\": \"$(cfg limits.sut_mem)\", \"db_cpus\": $(cfg limits.db_cpus), \"db_mem\": \"$(cfg limits.db_mem)\" },"
-    echo "  \"dataset\": { \"size\": \"$SIZE\", \"hash\": \"$hash\" },"
+    echo "  \"dataset\": { \"size\": \"$SIZE\", \"hash\": \"$hash\"${seed_fields} },"
     echo "  \"slo\": { \"p99_ms\": $(cfg slo.p99_ms), \"max_error_rate\": $(cfg slo.max_error_rate), \"p99_ms_by_scenario\": { $slo_map } },"
     echo "  \"run\": { \"repetitions\": $REPS, \"warmup_s\": $WARMUP_S, \"measure_s\": $MEASURE_S, \"cooldown_s\": $COOLDOWN_S },"
     echo "  \"saturation_ramp\": { \"start_rate\": ${START_RATE:-$(cfg workload.saturation.start_rate)}, \"step_rate\": ${STEP_RATE:-$(cfg workload.saturation.step_rate)}, \"step_duration\": \"${STEP_DURATION:-$(cfg workload.saturation.step_duration)}\", \"max_rate\": ${MAX_RATE:-$(cfg workload.saturation.max_rate)}, \"abort_delay_s\": 10 },"

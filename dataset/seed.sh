@@ -73,6 +73,28 @@ find "$DIR" -name '*.json' \
 
 ok="$(grep -c '^OK' "$RESULTS" || true)"
 fail="$(grep -c '^FAIL' "$RESULTS" || true)"
-grep '^FAIL' "$RESULTS" | head -20 || true
-echo "==> Seeded $ok bundles, $fail failed → $BASE"
-[[ "$fail" -eq 0 ]]
+total=$((ok + fail))
+pct=$(( total > 0 ? ok * 100 / total : 0 ))
+# Tolerate a small number of dropped bundles instead of failing the whole run. Synthea
+# bundles are atomic `transaction`s — each fully commits or fully rolls back — so a drop
+# means a missing patient, never a half-written one. Complete the seed if enough landed;
+# default threshold 90%, override with SEED_MIN_SUCCESS_PCT (set 100 for zero-tolerance).
+min_pct="${SEED_MIN_SUCCESS_PCT:-90}"
+
+# Record EVERY failure (not just a sample) so the dropped set is auditable in the log.
+if [[ "$fail" -gt 0 ]]; then
+  echo "==> $fail bundle(s) failed (their patients are likely absent — atomic txns, so no partial data):"
+  grep '^FAIL' "$RESULTS"
+fi
+# Machine-readable summary alongside the dataset, for the orchestrator/report to pick up.
+printf '{"bundles_total":%d,"bundles_ok":%d,"bundles_failed":%d,"success_pct":%d,"threshold_pct":%d}\n' \
+  "$total" "$ok" "$fail" "$pct" "$min_pct" > "$DIR/../seed-summary.json"
+
+echo "==> SEED SUMMARY: ${ok}/${total} bundles loaded — ${fail} failed, ${pct}% success (threshold ${min_pct}%) → $BASE"
+if [[ "$pct" -ge "$min_pct" ]]; then
+  [[ "$fail" -gt 0 ]] && echo "==> Proceeding: ${pct}% ≥ ${min_pct}% — dataset is ${ok} bundles (${fail} short)."
+  exit 0
+else
+  echo "==> ABORTING seed: ${pct}% < ${min_pct}% — too many bundles dropped to trust the dataset." >&2
+  exit 1
+fi
