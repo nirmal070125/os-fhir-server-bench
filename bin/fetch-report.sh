@@ -15,8 +15,13 @@ KEY="$(az storage account keys list -g "$(bin/cfg azure.resource_group)" -n "$AC
 names="$(az storage blob list --account-name "$ACCT" --account-key "$KEY" -c "$CONT" --query '[].name' -o tsv 2>/dev/null || true)"
 [[ -n "$names" ]] || { echo "no runs found in Blob ($ACCT/$CONT) — the run may not have uploaded yet"; exit 1; }
 
-prefix="${1:-$(printf '%s\n' "$names" | sed -E 's#/.*##' | sort -u | tail -1)}"
-echo "==> run: $prefix   (others: $(printf '%s\n' "$names" | sed -E 's#/.*##' | sort -u | paste -sd' ' -))"
+# Default to the LATEST run: keep only run-YYYYMMDD-HHMMSS prefixes (those sort by
+# time) — never the cache/datasets/snapshots prefixes, which sort after 'run-' and
+# would otherwise win tail -1 and point at a dir with no report.
+runs="$(printf '%s\n' "$names" | sed -E 's#/.*##' | grep -E '^run-[0-9]' | sort -u)"
+prefix="${1:-$(printf '%s\n' "$runs" | tail -1)}"
+[[ -n "$prefix" ]] || { echo "no completed runs in Blob yet (only cache/snapshots). Pass a prefix or run a benchmark."; exit 1; }
+echo "==> run: $prefix   (runs: $(printf '%s\n' "$runs" | paste -sd' ' -))"
 dest="results-blob/$prefix"; mkdir -p "$dest"
 get() { az storage blob download --account-name "$ACCT" --account-key "$KEY" -c "$CONT" -n "$prefix/$1" -f "$dest/$1" -o none 2>/dev/null; }
 
