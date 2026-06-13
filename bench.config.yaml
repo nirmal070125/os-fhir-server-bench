@@ -62,12 +62,12 @@ servers:
   fhir-server-go:
     enabled: true
     # Built from source at a pinned commit so the SUT is exactly reproducible.
-    # This commit = latest wso2:main (incl. PR #170 configurable HTTP timeouts)
-    # merged into the still-open PR #167 branch (standard FHIR operations:
-    # $validate/$meta/$convert/$lastn/$document) = everything merged + #167.
+    # This commit = head of wso2/open-healthcare-prebuilt-services PR #176
+    # "perf(fhir-server-go): batch index writes + cache FHIRPath ASTs on ingest" —
+    # the ingest-path optimization we want to measure against the read/ingest sweep.
     repo: https://github.com/nirmal070125/open-healthcare-prebuilt-services.git
-    ref: fhir-server-go/operations
-    commit: 81a984247c3222ce45ced543f5eb3f9af7633ed1
+    ref: fhir-server-go/ingest-perf
+    commit: f575cb7469a87eee38d530cb152c3336a0509f89
     context_subdir: miscellaneous/fhir-server-go   # build context inside the repo
     db_image: postgres:16-alpine                   # native engine for this server
     base_path: /fhir/r4
