@@ -56,17 +56,29 @@ export function record(res, op, expectStatus) {
 }
 
 // ---- executor -------------------------------------------------------------
-// Closed model: VUS concurrent clients, each looping send -> await reply -> send
-// next (no think-time). Concurrency is the INPUT we set exactly; throughput is the
-// server's measured output. We sweep VUS across a ladder (one level per run) — see
-// docs/load-model.md. A VU never fires its next request until the previous reply
-// returns, so there is no VU pool to exhaust and no dropped-iteration artifact.
-export function constantVus(name) {
+// Open model: k6 issues RATE iterations/sec on a clock, independent of how fast the
+// server responds. The OFFERED RATE is the input we set exactly; the server either
+// keeps up (achieved throughput ≈ offered, latency flat) or falls behind (latency
+// climbs, backlog grows). We sweep RATE across a ladder (one level per run) — see
+// docs/load-model.md. This avoids coordinated omission: a slow response can't
+// throttle the offered load, so the tail latency stays honest.
+//
+// VU sizing: the executor needs a free VU to hold each in-flight request. Required
+// VUs ≈ RATE × latency_seconds. preAllocatedVUs covers up to ~the SLO (so under-SLO
+// operation never waits on mid-test allocation); maxVUs gives headroom to ~3 s of
+// latency. If even that is exhausted (server deep in overload), k6 emits
+// dropped_iterations — report.py flags those levels as "offered rate not delivered"
+// rather than mistaking the load generator's ceiling for the server's. run.sh
+// computes PREALLOCATED_VUS/MAX_VUS from the rate; these are just the defaults.
+export function constantArrival(name) {
   return {
     [name]: {
-      executor: 'constant-vus',
-      vus: num(__ENV.VUS, 1),
+      executor: 'constant-arrival-rate',
+      rate: num(__ENV.RATE, 100),
+      timeUnit: '1s',
       duration: __ENV.DURATION || '60s',
+      preAllocatedVUs: num(__ENV.PREALLOCATED_VUS, 50),
+      maxVUs: num(__ENV.MAX_VUS, 500),
       exec: 'default',
     },
   };
@@ -134,16 +146,17 @@ export function summary(scenarioName) {
     const m = data.metrics || {};
     const dur = m.http_req_duration && m.http_req_duration.values ? m.http_req_duration.values : {};
     const failed = m.http_req_failed && m.http_req_failed.values ? m.http_req_failed.values : {};
+    const dropped = m.dropped_iterations && m.dropped_iterations.values ? (m.dropped_iterations.values.count || 0) : 0;
     const p50 = dur['p(50)'] !== undefined ? dur['p(50)'] : (dur.med || 0);
     out.stdout =
       `\n${scenarioName}: ` +
-      `vus=${__ENV.VUS || '?'} ` +
-      `reqs=${(m.http_reqs && m.http_reqs.values.count) || 0} ` +
-      `thrpt=${((m.http_reqs && m.http_reqs.values.rate) || 0).toFixed(1)}/s ` +
+      `offered=${__ENV.RATE || '?'}/s ` +
+      `achieved=${((m.http_reqs && m.http_reqs.values.rate) || 0).toFixed(1)}/s ` +
       `p50=${p50.toFixed(1)}ms ` +
       `p99=${(dur['p(99)'] || 0).toFixed(1)}ms ` +
       `p99.9=${(dur['p(99.9)'] || 0).toFixed(1)}ms ` +
-      `err=${(((failed.rate) || 0) * 100).toFixed(3)}%\n`;
+      `err=${(((failed.rate) || 0) * 100).toFixed(3)}% ` +
+      `dropped=${dropped}\n`;
     return out;
   };
 }

@@ -136,18 +136,20 @@ Per server, per scenario:
 6. **Repeat N ≥ 3 times** per (server, scenario); report **median + min/max or 95% CI**.
    Single runs are noise.
 
-**Load model.** Tool: **k6** — scriptable in JS, native headless, native percentile
+**Load model — open, not closed.** Use a **constant-arrival-rate** (open-model) executor so
+a slow server doesn't artificially throttle the offered load. This avoids **coordinated
+omission** — the #1 way naive benchmarks lie about tail latency. Tool: **k6**
+(`constant-arrival-rate` executor) — scriptable in JS, native headless, native percentile
 output, first-class Prometheus/InfluxDB push for centralized reporting.
 
-> **Superseded — see [`load-model.md`](load-model.md).** This proposal originally
-> specified an open (`constant-arrival-rate`) model to avoid coordinated omission. The
-> implemented benchmark uses a **closed model: a concurrency sweep** (fixed VUs per
-> level, `constant-vus`), because "throughput & latency at N concurrent clients" is the
-> widely-understood comparison and makes throughput a directly-measured, fair output. The
-> known trade-off — closed-model tail latency reads optimistically once a server is past
-> its knee (coordinated omission) — is handled explicitly: throughput (CO-immune) is the
-> headline, latency percentiles are labeled closed-model, and the SLO is read off the
-> pre-knee region. See `load-model.md` for the full rationale.
+> **Refined — see [`load-model.md`](load-model.md).** The implemented benchmark keeps this
+> open model but replaces the original single fixed rate per scenario (and the separate
+> ramping `saturation` scenario) with a **stepped offered-rate sweep**: each rate level is
+> a discrete `constant-arrival-rate` run measured to steady state, so we get a clean
+> per-level latency-vs-rate curve (the sweep *is* the saturation curve) and derive max
+> sustainable throughput as the highest rate meeting the SLO. The harness also sizes the
+> VU pool from the rate and flags `dropped_iterations`, so the load generator's ceiling is
+> never mistaken for the server's.
 
 **Isolation rules:**
 - Load generator on a **separate host** from the SUT (otherwise you measure the generator's

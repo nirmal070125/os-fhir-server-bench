@@ -126,24 +126,27 @@ run:
   repetitions: 3                         # report median + spread
   scenarios: [read-mix, ingest]          # closed-model concurrency sweeps (see docs/load-model.md)
 
-# Closed model — CONCURRENCY (number of in-flight clients = k6 VUs) is the swept
-# variable; throughput (req/s) is the server's measured output at each level. We run
-# one level per measurement window and step through the ladder, so the curve shows
-# how throughput scales and where it plateaus (the knee). Each VU loops send -> await
-# reply -> send next, so the offered load is self-limiting and there are no
-# dropped-iteration / VU-starvation artifacts. Override the ladder for smoke/iteration
-# with CONCURRENCY_LEVELS="1 8 32" (applies to all scenarios).
+# Open model — the OFFERED RATE (req/s k6 issues on a clock, NOT VU count) is the
+# swept variable; the server either keeps up (achieved ≈ offered, latency flat) or
+# falls behind (latency climbs). We run one rate per measurement window and step
+# through the ladder, so the latency-vs-rate curve shows where each server's knee is.
+# Arrival rate (not VU count) drives load so coordinated omission can't hide tail
+# latency; run.sh sizes the VU pool from the rate and report.py flags any level that
+# dropped iterations (offered rate not delivered). Ladders are log-spaced and extend
+# past where a 4-vCPU server saturates so the knee is bracketed. Override for
+# smoke/iteration with RATE_LEVELS="50 200" (applies to all scenarios).
 workload:
   read-mix:                # read-dominated real-world traffic; read-only (state shared across the sweep)
-    concurrency_levels: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+    rate_levels: [50, 100, 200, 400, 800, 1600, 3200]   # req/s offered
   ingest:                  # transaction-bundle writes (PR #165); snapshot restored before each level
-    concurrency_levels: [1, 2, 4, 8, 16, 32, 64]   # writes are heavier → lower ceiling
+    rate_levels: [10, 25, 50, 100, 200]                 # bundles/s — writes are heavier → lower ceiling
 
-# SLO line for the headline "max throughput while p99 < SLO" (the highest concurrency
-# still under the bar); full throughput-vs-concurrency curves are published too.
-# Default p99 is read-oriented (interactive GET/search). Writes are heavier, so
-# per-scenario overrides apply an operation-appropriate bar — set on operation type,
-# NOT to flatter any server, and applied identically to all six.
+# SLO line for the headline "max sustainable throughput" — the highest offered rate
+# the server keeps up with (achieved ≈ offered, no dropped iterations) while p99 < SLO
+# and errors < max; full latency-vs-rate curves are published too. Default p99 is
+# read-oriented (interactive GET/search). Writes are heavier, so per-scenario overrides
+# apply an operation-appropriate bar — set on operation type, NOT to flatter any
+# server, and applied identically to all six.
 slo:
   p99_ms: 500              # default: reads (read-mix)
   max_error_rate: 0.001
