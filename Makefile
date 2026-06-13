@@ -25,12 +25,19 @@ status: ## Show the in-flight run's progress (log tail / DONE)
 	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit \$$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
 	  || echo "no detached run found (.detached.env missing — run 'make smoke' or 'make benchmark')"
 
-stop: ## Stop the in-flight detached run (kill tmux 'bench'); DEALLOCATE=1 also halts VM billing
+stop: ## Stop the in-flight detached run (controller + workers, verified); DEALLOCATE=1 also halts VM billing
 	@set -a; . ./.detached.env 2>/dev/null; set +a; \
 	  if [ -z "$${LOADGEN_IP:-}" ]; then echo "no detached run found (.detached.env missing)"; \
-	  else echo "==> stopping run on $$LOADGEN_IP (tmux 'bench')"; \
-	    ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "tmux kill-session -t bench 2>/dev/null; pkill -f k6 || true; pkill -f orchestrate.sh || true" || true; \
-	    echo "run stopped."; fi
+	  else \
+	    echo "==> stopping run on loadgen $$LOADGEN_IP (kill controller + workers, verify)"; \
+	    ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP 'bash -s' < orchestrator/kill-run.sh \
+	      || echo "WARN: loadgen unreachable or processes lingered — if SSH timed out, your IP may have changed; 'make provision' re-locks SSH, then retry"; \
+	    if [ -n "$${SUT_IP:-}" ]; then \
+	      echo "==> clearing any in-flight restore on sut $$SUT_IP"; \
+	      ssh $$SSH_OPTS $$ADMIN@$$SUT_IP 'pkill -KILL -f pg_restore 2>/dev/null; pkill -KILL -f restore_postgres 2>/dev/null; true' \
+	        || echo "WARN: sut unreachable (NSG/IP?)"; \
+	    fi; \
+	  fi
 	@if [ "$(DEALLOCATE)" = "1" ]; then \
 	    echo "==> deallocating all VMs (compute billing stops; disks/IPs remain until 'make teardown')"; \
 	    az vm deallocate --ids $$(az vm list -g $$(bin/cfg azure.resource_group) --query '[].id' -o tsv); \
