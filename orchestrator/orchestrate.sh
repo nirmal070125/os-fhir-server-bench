@@ -122,14 +122,16 @@ stop_server() {
   sut_run "servers/$1/down.sh -v"
 }
 
-# Restart just the app container (service "server", same in every profile). A
-# Postgres restore drops/recreates the schema underneath a running server; pooled/
-# cached servers (HAPI, Medplum, IBM) keep stale connections + cached metadata and
-# then return 0 results. Restarting after a restore gives them fresh connections
-# against the restored data. fhir-server-go doesn't need it (pgx reconnects), but a
-# ~5s restart is harmless; the warm-up that follows absorbs the cold start.
-restart_app() { # <server>
-  sut_run "cd servers/$1 && { [ -f .env ] && docker compose --env-file .env restart server || docker compose restart server; }"
+# Stop/start just the app container (service "server", same in every profile). The
+# Postgres template-clone reset drops & recreates the working DB, so the app must hold
+# no connections to it during the swap: reset_state stops the app first, then starts it
+# after — which also gives pooled/cached servers (HAPI, Medplum, IBM) fresh connections
+# + metadata against the restored data. The warm-up that follows absorbs the cold start.
+stop_app() {  # <server> — stop just the app container (db keeps running)
+  sut_run "cd servers/$1 && { [ -f .env ] && docker compose --env-file .env stop server || docker compose stop server; }"
+}
+start_app() { # <server>
+  sut_run "cd servers/$1 && { [ -f .env ] && docker compose --env-file .env start server || docker compose start server; }"
 }
 
 # Wait (on the SUT) for the server to be ready — needed after a rocksdb restart;
@@ -199,8 +201,15 @@ phase_seed() {
 # their own container lifecycle.)
 reset_state() { # <server>
   local server="$1" engine snap; engine="$(server_engine "$server")"; snap="$(snapshot_path "$server")"
-  sut_run "$(db_env_prefix "$server")dataset/restore_${engine}.sh '$snap' >/dev/null"
-  [[ "$engine" == "postgres" ]] && restart_app "$server"
+  if [[ "$engine" == "postgres" ]]; then
+    # The template-clone reset drops & recreates the working DB, so the app must hold
+    # no connections to it — stop the app first, swap the DB, then start it back up.
+    stop_app "$server"
+    sut_run "$(db_env_prefix "$server")dataset/restore_${engine}.sh '$snap' >/dev/null"
+    start_app "$server"
+  else
+    sut_run "$(db_env_prefix "$server")dataset/restore_${engine}.sh '$snap' >/dev/null"
+  fi
   sut_wait_ready "$server"
 }
 
@@ -238,9 +247,15 @@ run_sweep() {
       measure_level "$server" "$scenario" "$rep" "$rate" "$target" || return 1
     done
   else
-    log "  rep $rep: restore -> warm-up ${WARMUP_S}s (discard) -> sweep offered rate [${levels[*]}]/s"
-    reset_state "$server"
-    loadgen_run "RATE=${levels[$(( ${#levels[@]} - 1 ))]} CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'" || true
+    # read-only: state can't change across reps, so restore + warm-up ONCE (on rep 1)
+    # and reuse the warmed baseline for every rep — no point paying a reset per rep.
+    if [[ "$rep" == "1" ]]; then
+      log "  rep $rep: restore -> warm-up ${WARMUP_S}s (discard) -> sweep offered rate [${levels[*]}]/s"
+      reset_state "$server"
+      loadgen_run "RATE=${levels[$(( ${#levels[@]} - 1 ))]} CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'" || true
+    else
+      log "  rep $rep: reuse warmed read-only baseline -> sweep offered rate [${levels[*]}]/s"
+    fi
     for rate in "${levels[@]}"; do
       measure_level "$server" "$scenario" "$rep" "$rate" "$target" || return 1
     done
