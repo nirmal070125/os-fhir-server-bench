@@ -40,6 +40,23 @@ copy_repo() { echo "==> copying working tree -> $1"; ssh $OPTS "$USER@$1" "rm -r
 }
 
 wait_ssh "$sut_ip"; wait_ssh "$loadgen_ip"
+
+# Refuse to clobber a run already in flight: copy_repo below does `rm -rf $REPO`, and
+# tmux can't start a second 'bench' session — so re-launching over a live run would
+# damage it AND fail to start a new one. Stop it cleanly first (make stop), or pass
+# FORCE=1 to stop the in-flight run here before relaunching.
+if ssh $OPTS "$USER@$loadgen_ip" 'tmux has-session -t bench 2>/dev/null'; then
+  if [[ "${FORCE:-0}" == "1" ]]; then
+    echo "==> FORCE=1: stopping the in-flight run on the loadgen first"
+    ssh $OPTS "$USER@$loadgen_ip" 'tmux kill-session -t bench 2>/dev/null; pkill -f k6 || true; pkill -f orchestrate.sh || true'
+    sleep 3
+  else
+    echo "ERROR: a benchmark run is already in flight on the loadgen (tmux session 'bench')." >&2
+    echo "       Stop it first:  make stop      (or re-run with FORCE=1 to replace it)" >&2
+    exit 1
+  fi
+fi
+
 copy_repo "$sut_ip"; copy_repo "$loadgen_ip"
 
 # Ephemeral key so the loadgen can ssh the SUT over the private network (we don't put
@@ -187,6 +204,7 @@ cat <<EOF
       ssh $OPTS $USER@$loadgen_ip 'tail -f $REPO/run.log'          # live stream
       ssh $OPTS $USER@$loadgen_ip -t 'tmux attach -t bench'        # live (Ctrl-b d to detach)
       make report                                                  # pull results + show locally
+      make stop                                                    # stop this run (DEALLOCATE=1 also halts billing)
 
     When you've seen the report:  make teardown   (stops billing)
 EOF
