@@ -68,7 +68,7 @@ echo "==> authorizing controller key on the SUT"
 ssh $OPTS "$USER@$sut_ip" "mkdir -p ~/.ssh && grep -qF '$pub' ~/.ssh/authorized_keys 2>/dev/null || echo '$pub' >> ~/.ssh/authorized_keys"
 echo "==> installing the controller key + tmux on the loadgen"
 scp $OPTS -q "$TMPK" "$USER@$loadgen_ip:.ssh/bench_ctrl"
-ssh $OPTS "$USER@$loadgen_ip" "chmod 600 ~/.ssh/bench_ctrl && (command -v tmux >/dev/null || sudo apt-get install -y -qq tmux)"
+ssh $OPTS "$USER@$loadgen_ip" "chmod 600 ~/.ssh/bench_ctrl && (command -v tmux >/dev/null || sudo apt-get install -y -qq tmux) && (command -v ts >/dev/null || sudo apt-get install -y -qq moreutils)"
 
 # --- storage SAS so the run publishes its report to Blob (no az needed on the VM) ---
 # The operator (you) has az; mint a short-lived container write-SAS for the upload and
@@ -146,13 +146,18 @@ cat > "$launch" <<LAUNCH
 cd "$REPO"
 $exports
 : > run.log   # create immediately so the blob appears (and is watchable) within ~a minute
+# Prefix every log line with a wall-clock timestamp so a run can be analysed step by
+# step — including the silent restore gaps (the timestamp on the marker before a restore
+# vs the first line after it gives its duration). Uses moreutils 'ts' when present
+# (installed on the loadgen above); falls back to a pass-through so it never breaks a run.
+stamp() { if command -v ts >/dev/null 2>&1; then ts '[%Y-%m-%d %H:%M:%S]'; else cat; fi; }
 # Start the live-log heartbeat BEFORE the run, stop it once run.done exists.
 $hb_start
 {
   orchestrator/orchestrate.sh all
   echo \$? > run.exit
   python3 reporting/report.py || true
-} 2>&1 | tee -a run.log
+} 2>&1 | stamp | tee -a run.log
 touch run.done
 $hb_stop
 # Final authoritative upload AFTER the block so run.log is complete — runs even if the run
