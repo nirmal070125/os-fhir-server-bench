@@ -1,16 +1,17 @@
-// read-mix — steady, read-dominated real-world traffic at a constant arrival rate.
-// A realistic clinical read mix against EXISTING seeded data: instance reads,
-// patient searches, and patient-scoped clinical queries. No writes (state stays
-// identical across reps so the comparison is fair).
+// read-mix — read-dominated real-world traffic from VUS concurrent clients
+// (closed model). A realistic clinical read mix against EXISTING seeded data:
+// instance reads, patient searches, and patient-scoped clinical queries. No writes
+// (state stays identical across the whole concurrency sweep so the comparison is
+// fair). One concurrency level per run; the orchestrator sweeps the ladder.
 import http from 'k6/http';
 import {
-  BASE, JSON_HEADERS, constantArrival, thresholds, record,
+  BASE, JSON_HEADERS, constantVus, thresholds, record,
   collectIds, randItem, summary, SUMMARY_TREND_STATS,
 } from './lib/common.js';
 
 export const options = {
-  scenarios: constantArrival('read_mix'),
-  thresholds: thresholds(false),
+  scenarios: constantVus('read_mix'),
+  thresholds: thresholds(),
   summaryTrendStats: SUMMARY_TREND_STATS,
 };
 

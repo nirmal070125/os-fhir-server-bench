@@ -1,39 +1,44 @@
 # scenarios/
 
-k6 load scripts for the benchmark. **Open model** (constant/ramping *arrival rate*,
-not a fixed VU pool) so the load offered is independent of how fast the server
-responds — this is what prevents coordinated omission from hiding latency.
+k6 load scripts for the benchmark. **Closed model** (fixed VU pool = a set number of
+concurrent clients, each looping send → await reply → send next). Concurrency is the
+input we set exactly; throughput is the server's measured output. The orchestrator
+**sweeps concurrency** across a ladder and measures each level — see
+[`docs/load-model.md`](../docs/load-model.md).
 
 | Scenario | Executor | What it measures |
 |---|---|---|
-| `read-mix.js` | constant-arrival-rate | Steady real-world read traffic at a fixed req/s. Read-only → DB state is identical across reps. |
-| `ingest.js` | constant-arrival-rate | Sustained writes: POSTs `Patient+Encounter+2×Observation` **transaction bundles** (the PR #165 endpoint) at a fixed bundles/s. |
-| `saturation.js` | ramping-arrival-rate | Steps offered read load up until the SLO trips (`abortOnFail`). Last sustained step ≈ **max sustainable throughput**. |
+| `read-mix.js` | constant-vus | Read-dominated real-world traffic from `VUS` concurrent clients. Read-only → DB state is identical across the whole sweep. |
+| `ingest.js` | constant-vus | Writes: POSTs `Patient+Encounter+2×Observation` **transaction bundles** (the PR #165 endpoint) from `VUS` concurrent clients. Snapshot restored before each level. |
 
-`lib/common.js` holds the shared bits — required `BASE_URL`, SLO thresholds, the
-`op`-tagged latency/error metrics, the executors, and `setup()` id-pooling (it pages
-the server's own API for real ids, so no external fixture file is needed).
+The standalone saturation scenario was removed: the concurrency sweep *is* the
+saturation curve — throughput rises with concurrency, then plateaus at the knee.
+
+`lib/common.js` holds the shared bits — required `BASE_URL`, SLO thresholds (no
+abort), the `op`-tagged latency/error metrics, the `constant-vus` executor, and
+`setup()` id-pooling (it pages the server's own API for real ids, so no external
+fixture file is needed).
 
 ## Running
 
-All tunables come from `bench.config.yaml` (`workload.*`, `slo.*`); `run.sh` maps them
-to k6 env vars — nothing is hard-coded in the scripts.
+`CONCURRENCY` (the level to measure) is required; SLO knobs come from
+`bench.config.yaml` (`slo.*`). One concurrency level per invocation:
 
 ```bash
-# one scenario, once, against a running server (seed it first)
-scenarios/run.sh read-mix   http://localhost:9090/fhir/r4 60s
-scenarios/run.sh ingest     http://localhost:9090/fhir/r4 60s
-scenarios/run.sh saturation http://localhost:9090/fhir/r4
+# one workload at one concurrency level, against a running server (seed it first)
+CONCURRENCY=32 scenarios/run.sh read-mix http://localhost:9090/fhir/r4 60s
+CONCURRENCY=16 scenarios/run.sh ingest   http://localhost:9090/fhir/r4 60s
 ```
 
 Output for each invocation → `results/<scenario>/`: `metrics.json` (line-delimited
-per-point k6 JSON) + `summary.json` (end-of-test aggregate). The orchestrator (plan
-step 6) wraps `run.sh` with warm-up (discarded), `repetitions`, and Prometheus
-remote-write; reporting (step 7) turns the JSON into the published curves.
+per-point k6 JSON) + `summary.json` (end-of-test aggregate). The orchestrator wraps
+`run.sh` with restore, warm-up (discarded), `repetitions`, the concurrency-ladder
+sweep, and Prometheus remote-write; reporting turns the per-level JSON into the
+published throughput-vs-concurrency curves.
 
-## Env vars (set by `run.sh`, overridable)
+## Env vars (set by `run.sh` / orchestrator, overridable)
 
-`BASE_URL` (required, …/fhir/r4) · `P99_MS` · `MAX_ERROR_RATE` · `RATE` ·
-`DURATION` · `PREALLOCATED_VUS` · `MAX_VUS` · (saturation) `START_RATE` /
-`STEP_RATE` / `STEP_DURATION` / `MAX_RATE` · `POOL_SIZE` (ids to pool for reads) ·
-`READ_MIX_WEIGHTS` (JSON, override the read distribution) · `SUMMARY_OUT`.
+`BASE_URL` (required, …/fhir/r4) · `CONCURRENCY` (required — VUs for this level) ·
+`P99_MS` · `MAX_ERROR_RATE` · `DURATION` · `POOL_SIZE` (ids to pool for reads) ·
+`READ_MIX_WEIGHTS` (JSON, override the read distribution) · `SUMMARY_OUT` ·
+`CONCURRENCY_LEVELS` (orchestrator: override the ladder for all scenarios, e.g. `"1 8 32"`).

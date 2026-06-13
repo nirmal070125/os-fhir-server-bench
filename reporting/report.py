@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Generate the comparison report from results/.
 
-Reads every results/<server>/run-manifest.json and the per-rep k6 summaries at
-results/<server>/<scenario>/rep-*/summary.json, aggregates across repetitions
-(median + min/max), and writes:
+Closed model: each workload is swept across a ladder of concurrency levels (k6 VUs).
+Reads every results/<server>/run-manifest.json and the per-level k6 summaries at
+results/<server>/<scenario>/rep-*/c-*/summary.json, aggregates across repetitions
+(median + min/max) per concurrency level, and writes:
 
-  results/report.md   human-readable comparison (one table per scenario)
-  results/report.csv  flat rows for any downstream analysis
+  results/report.md   human-readable comparison: a headline table + a
+                      throughput-vs-concurrency curve per server, per scenario
+  results/report.csv  one row per (scenario, server, concurrency) for plotting
 
 Fairness metric = throughput per vCPU (measured req/s ÷ sut_cpus from the manifest),
-so servers given the same CPU envelope are compared on equal footing. SLO pass/fail
-uses the manifest's slo (p99_ms AND max_error_rate). No third-party deps — stdlib only.
+so servers given the same CPU envelope are compared on equal footing. Throughput is
+coordinated-omission-immune; latency percentiles are closed-model per-request values
+(see docs/load-model.md). SLO pass/fail uses the manifest's slo (p99_ms AND
+max_error_rate). No third-party deps — stdlib only.
 """
 import csv
 import json
-import os
 import statistics
 import sys
 from pathlib import Path
@@ -34,55 +37,21 @@ def trend(metric):
 
 
 def rep_row(summary):
-    """Extract the numbers we care about from one rep's k6 summary."""
+    """Extract the numbers we care about from one rep's k6 summary at one level."""
     m = summary.get("metrics", {})
     dur = trend(m.get("http_req_duration"))
     reqs = (m.get("http_reqs") or {}).get("values", {})
     failed = (m.get("http_req_failed") or {}).get("values", {})
     p50 = dur.get("p(50)", dur.get("med", 0.0))
     return {
-        "rate": reqs.get("rate", 0.0),
+        "rate": reqs.get("rate", 0.0),     # measured throughput (req/s) — the headline
         "count": reqs.get("count", 0),
         "p50": p50,
         "p95": dur.get("p(95)", 0.0),
         "p99": dur.get("p(99)", 0.0),
         "p99_9": dur.get("p(99.9)", 0.0),
         "err": failed.get("rate", 0.0),
-        "dur_s": summary.get("state", {}).get("testRunDurationMs", 0.0) / 1000.0,
     }
-
-
-def parse_dur(s):
-    """'30s' -> 30.0, '5m' -> 300.0 (Go-ish duration; seconds/minutes only)."""
-    s = str(s).strip()
-    if s.endswith("ms"):
-        return float(s[:-2]) / 1000.0
-    if s.endswith("m"):
-        return float(s[:-1]) * 60.0
-    if s.endswith("s"):
-        return float(s[:-1])
-    return float(s)
-
-
-def max_sustainable(dur_s, ramp):
-    """Max sustainable throughput from a saturation rep.
-
-    saturation ramps the offered rate up and aborts (abortOnFail) ~abort_delay_s
-    after p99/error first breaches the SLO, so the run duration tells us which ramp
-    stage it reached -> the offered rate just before the breach. Returns
-    (rate_req_s, capped) where capped=True means it never breached (sustained the
-    whole ramp, so the true ceiling is >= max_rate). Measurement is untouched; this
-    is pure post-processing of the run duration.
-    """
-    start, step, maxr = ramp["start_rate"], ramp["step_rate"], ramp["max_rate"]
-    step_dur = parse_dur(ramp["step_duration"])
-    abort = ramp.get("abort_delay_s", 10)
-    n_stages = (maxr - start) // step + 1
-    full = n_stages * step_dur
-    if dur_s >= full * 0.98:           # ran the whole ramp without breaching
-        return (maxr, True)
-    stage = max(0, int((dur_s - abort) // step_dur))
-    return (min(maxr, start + step * stage), False)
 
 
 def agg(vals):
@@ -93,7 +62,7 @@ def agg(vals):
 
 
 def discover():
-    """server -> {manifest, scenarios{name -> [rep_row,...]}}"""
+    """server -> {manifest, scenarios{name -> {concurrency:int -> [rep_row,...]}}}"""
     out = {}
     if not RESULTS.exists():
         return out
@@ -104,15 +73,33 @@ def discover():
         for scen_dir in sorted(mf.parent.iterdir()):
             if not scen_dir.is_dir():
                 continue
-            reps = [rep_row(load(s)) for s in sorted(scen_dir.glob("rep-*/summary.json"))]
-            if reps:
-                scenarios[scen_dir.name] = reps
+            levels = {}  # concurrency -> [rep_row, ...]
+            for c_dir in sorted(scen_dir.glob("rep-*/c-*")):
+                try:
+                    c = int(c_dir.name.split("-", 1)[1])
+                except (IndexError, ValueError):
+                    continue
+                sfile = c_dir / "summary.json"
+                if sfile.exists():
+                    levels.setdefault(c, []).append(rep_row(load(sfile)))
+            if levels:
+                scenarios[scen_dir.name] = levels
         out[server] = {"manifest": manifest, "scenarios": scenarios}
     return out
 
 
-def fmt(x, unit=""):
-    return f"{x:.1f}{unit}" if isinstance(x, float) else f"{x}{unit}"
+def level_stats(reps):
+    """Median (+ throughput spread) across reps for one concurrency level."""
+    thr_med, thr_lo, thr_hi = agg([r["rate"] for r in reps])
+    return {
+        "thr_med": thr_med, "thr_lo": thr_lo, "thr_hi": thr_hi,
+        "p50": agg([r["p50"] for r in reps])[0],
+        "p95": agg([r["p95"] for r in reps])[0],
+        "p99": agg([r["p99"] for r in reps])[0],
+        "p99_9": agg([r["p99_9"] for r in reps])[0],
+        "err_med": agg([r["err"] for r in reps])[0],
+        "err_hi": agg([r["err"] for r in reps])[2],
+    }
 
 
 def main():
@@ -127,7 +114,7 @@ def main():
     p99_slo = slo.get("p99_ms", 500)
     err_slo = slo.get("max_error_rate", 0.001)
     p99_by_scen = slo.get("p99_ms_by_scenario", {})
-    # Each scenario is judged against its own p99 bar (e.g. ingest writes are heavier).
+
     def p99_slo_for(scen):
         return p99_by_scen.get(scen, p99_slo)
 
@@ -142,107 +129,99 @@ def main():
         ok_b, tot_b, fail_b = ds.get("bundles_ok", 0), ds["bundles_total"], ds.get("bundles_failed", 0)
         seed_note = f" — {ok_b:,}/{tot_b:,} bundles loaded" + (f" ({fail_b:,} failed at seed, {ds.get('success_pct','?')}%)" if fail_b else " (all)")
     md.append(
+        f"- **Load model:** {any_m.get('load_model','closed (constant-vus concurrency sweep)')} — "
+        f"concurrency (in-flight clients) is swept; throughput is the measured output  \n"
         f"- **Dataset:** {ds.get('size','?')} (hash `{str(ds.get('hash',''))[:12]}`){seed_note}  \n"
         f"- **Envelope (per server):** {lim.get('sut_cpus','?')} vCPU / {lim.get('sut_mem','?')} app, "
         f"{lim.get('db_cpus','?')} vCPU / {lim.get('db_mem','?')} db  \n"
         f"- **SLO:** error rate < {err_slo}; p99 < {p99_slo} ms (default/reads)"
         + (f", overrides: {', '.join(f'{k} {v}ms' for k, v in p99_by_scen.items() if v != p99_slo)}" if any(v != p99_slo for v in p99_by_scen.values()) else "")
-        + " — per-table below  \n"
+        + "  \n"
         f"- **Reps:** {any_m.get('run',{}).get('repetitions','?')} "
-        f"(measure {any_m.get('run',{}).get('measure_s','?')}s, warm-up "
+        f"(measure {any_m.get('run',{}).get('measure_s','?')}s/level, warm-up "
         f"{any_m.get('run',{}).get('warmup_s','?')}s discarded)  \n"
         f"- **k6:** {any_m.get('k6_version','?')}  ·  **bench commit:** {any_m.get('bench_repo_sha','?')}\n"
     )
 
     csv_rows = []
     for scen in all_scenarios:
-        md.append(f"\n## {scen}\n")
-
-        # saturation reports MAX SUSTAINABLE THROUGHPUT (offered rate at SLO breach),
-        # not pass/fail — a ramp is meant to breach the SLO at its top step.
-        if scen == "saturation":
-            md.append("| Server | Max sustainable (req/s) | per vCPU | aggregate p99 (ms) | Error rate |")
-            md.append("|---|---|---|---|---|")
-            sat = []
-            for server, v in data.items():
-                reps = v["scenarios"].get(scen)
-                if not reps:
-                    continue
-                cpus = v["manifest"].get("limits", {}).get("sut_cpus", 1) or 1
-                ramp = v["manifest"].get("saturation_ramp")
-                if not ramp:
-                    continue  # older manifest without ramp params
-                rates, capped = [], False
-                for r in reps:
-                    rate, cap = max_sustainable(r["dur_s"], ramp)
-                    rates.append(rate)
-                    capped = capped or cap
-                ms_med = statistics.median(rates)
-                p99_med, _, _ = agg([r["p99"] for r in reps])
-                err_med, _, _ = agg([r["err"] for r in reps])
-                sat.append((ms_med, server, cpus, ms_med, capped, p99_med, err_med))
-            sat.sort(reverse=True)
-            for (_, server, cpus, ms_med, capped, p99_med, err_med) in sat:
-                label = f"≥ {ms_med:.0f} (no breach)" if capped else f"~{ms_med:.0f}"
-                md.append(f"| {server} | {label} | {ms_med/cpus:.0f} | {p99_med:.1f} | {err_med*100:.3f}% |")
-                csv_rows.append({
-                    "scenario": scen, "server": server, "sut_cpus": cpus,
-                    "throughput_rps": round(ms_med, 2),
-                    "throughput_per_vcpu": round(ms_med / cpus, 2),
-                    "p50_ms": "", "p95_ms": "",
-                    "p99_ms": round(p99_med, 2), "p99_9_ms": "",
-                    "error_rate": round(err_med, 6), "slo_pass": "max-sustainable",
-                })
-            continue
-
         scen_p99_slo = p99_slo_for(scen)
-        md.append(f"_SLO: p99 < {scen_p99_slo} ms AND error rate < {err_slo}_\n")
-        md.append("| Server | Throughput (req/s) | Thru/vCPU | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | Error rate | SLO |")
-        md.append("|---|---|---|---|---|---|---|---|---|")
-        # rank by median throughput desc
-        ranked = []
+        md.append(f"\n## {scen}\n")
+        md.append(
+            f"_Closed model — concurrency = number of in-flight clients (k6 VUs). "
+            f"**Throughput** is the measured output (coordinated-omission-immune). "
+            f"Latency columns are **closed-model per-request percentiles** (optimistic "
+            f"once a server is past its knee). SLO: p99 < {scen_p99_slo} ms AND error rate "
+            f"< {err_slo}._\n"
+        )
+
+        # ---- per-server level stats -------------------------------------------------
+        server_levels = {}  # server -> {cpus, levels: [(c, stats), ...] sorted by c}
         for server, v in data.items():
-            reps = v["scenarios"].get(scen)
-            if not reps:
+            levels = v["scenarios"].get(scen)
+            if not levels:
                 continue
             cpus = v["manifest"].get("limits", {}).get("sut_cpus", 1) or 1
-            rate_med, _, _ = agg([r["rate"] for r in reps])
-            p50_med, _, _ = agg([r["p50"] for r in reps])
-            p95_med, _, _ = agg([r["p95"] for r in reps])
-            p99_med, p99_lo, p99_hi = agg([r["p99"] for r in reps])
-            p999_med, _, _ = agg([r["p99_9"] for r in reps])
-            err_med, _, err_hi = agg([r["err"] for r in reps])
-            passed = (p99_med < scen_p99_slo) and (err_hi < err_slo)
-            ranked.append((rate_med, server, cpus, rate_med, p50_med, p95_med,
-                           p99_med, p99_lo, p99_hi, p999_med, err_med, passed))
-        ranked.sort(reverse=True)
-        for (_, server, cpus, rate_med, p50_med, p95_med, p99_med, p99_lo, p99_hi,
-             p999_med, err_med, passed) in ranked:
-            md.append(
-                f"| {server} | {rate_med:.1f} | {rate_med/cpus:.1f} | {p50_med:.1f} | "
-                f"{p95_med:.1f} | {p99_med:.1f} (±{(p99_hi-p99_lo)/2:.1f}) | {p999_med:.1f} | "
-                f"{err_med*100:.3f}% | {'✅ PASS' if passed else '❌ FAIL'} |"
-            )
-            csv_rows.append({
-                "scenario": scen, "server": server, "sut_cpus": cpus,
-                "throughput_rps": round(rate_med, 2),
-                "throughput_per_vcpu": round(rate_med / cpus, 2),
-                "p50_ms": round(p50_med, 2), "p95_ms": round(p95_med, 2),
-                "p99_ms": round(p99_med, 2), "p99_9_ms": round(p999_med, 2),
-                "error_rate": round(err_med, 6), "slo_pass": passed,
-            })
+            rows = [(c, level_stats(levels[c])) for c in sorted(levels)]
+            server_levels[server] = {"cpus": cpus, "levels": rows}
 
-    md.append("\n> Throughput/error are medians across reps; p99 shows ±half-spread. "
-              "Throughput/vCPU is the fairness-normalized headline. "
-              "**saturation** reports max sustainable throughput — the offered rate just "
-              "before p99/error breached the SLO (`≥ X (no breach)` means it sustained the "
-              "whole ramp); its p99 is the aggregate over the full ramp, expected to be high.\n")
+        # ---- headline: peak throughput + max throughput under SLO -------------------
+        md.append("### Headline\n")
+        md.append("| Server | Peak throughput | Peak/vCPU | Max throughput @ p99<SLO |")
+        md.append("|---|---|---|---|")
+        headline = []
+        for server, sl in server_levels.items():
+            cpus, rows = sl["cpus"], sl["levels"]
+            peak_c, peak = max(rows, key=lambda cr: cr[1]["thr_med"])
+            under = [(c, s) for (c, s) in rows if s["p99"] < scen_p99_slo and s["err_hi"] < err_slo]
+            if under:
+                slo_c, slo_s = max(under, key=lambda cr: cr[1]["thr_med"])
+                slo_cell = f"{slo_s['thr_med']:.0f} @ C={slo_c}"
+            else:
+                slo_cell = "— (no level met SLO)"
+            headline.append((peak["thr_med"], server, peak_c, cpus, slo_cell))
+        headline.sort(reverse=True)
+        for (peak_thr, server, peak_c, cpus, slo_cell) in headline:
+            md.append(f"| {server} | {peak_thr:.0f} req/s @ C={peak_c} | {peak_thr/cpus:.0f} | {slo_cell} |")
+
+        # ---- per-server throughput-vs-concurrency curve -----------------------------
+        for server, sl in server_levels.items():
+            cpus, rows = sl["cpus"], sl["levels"]
+            md.append(f"\n### {server} — throughput vs concurrency\n")
+            md.append("| Concurrency | Throughput (req/s) | Thru/vCPU | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | Error rate | SLO |")
+            md.append("|---|---|---|---|---|---|---|---|---|")
+            for (c, s) in rows:
+                passed = (s["p99"] < scen_p99_slo) and (s["err_hi"] < err_slo)
+                spread = (s["thr_hi"] - s["thr_lo"]) / 2
+                md.append(
+                    f"| {c} | {s['thr_med']:.1f} (±{spread:.1f}) | {s['thr_med']/cpus:.1f} | "
+                    f"{s['p50']:.1f} | {s['p95']:.1f} | {s['p99']:.1f} | {s['p99_9']:.1f} | "
+                    f"{s['err_med']*100:.3f}% | {'✅' if passed else '❌'} |"
+                )
+                csv_rows.append({
+                    "scenario": scen, "server": server, "sut_cpus": cpus,
+                    "concurrency": c,
+                    "throughput_rps": round(s["thr_med"], 2),
+                    "throughput_per_vcpu": round(s["thr_med"] / cpus, 2),
+                    "p50_ms": round(s["p50"], 2), "p95_ms": round(s["p95"], 2),
+                    "p99_ms": round(s["p99"], 2), "p99_9_ms": round(s["p99_9"], 2),
+                    "error_rate": round(s["err_med"], 6), "slo_pass": passed,
+                })
+
+    md.append(
+        "\n> Throughput is the median across reps (±half-spread); Throughput/vCPU is the "
+        "fairness-normalized headline. **Peak throughput** is the server's capacity (the "
+        "knee of the curve); **Max throughput @ p99<SLO** is the highest concurrency still "
+        "under the latency bar. Latency percentiles are closed-model per-request values — "
+        "trustworthy below the knee, optimistic above it (coordinated omission); see "
+        "docs/load-model.md.\n"
+    )
 
     report_md = RESULTS / "report.md"
     report_md.write_text("\n".join(md) + "\n")
     with open(RESULTS / "report.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(csv_rows[0].keys()) if csv_rows else
-                           ["scenario", "server"])
+                           ["scenario", "server", "concurrency"])
         w.writeheader()
         w.writerows(csv_rows)
 

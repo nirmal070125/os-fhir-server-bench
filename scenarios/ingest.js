@@ -1,17 +1,18 @@
-// ingest — sustained writes at a constant arrival rate. Each iteration POSTs a
-// FHIR transaction bundle (Patient + Encounter + 2 Observations) to the system
-// endpoint — exactly the path the seeder uses, exercising the transaction-bundle
-// endpoint (PR #165). New random resources each time, so this measures write
-// throughput on top of the seeded baseline.
+// ingest — sustained writes from VUS concurrent clients (closed model). Each
+// iteration POSTs a FHIR transaction bundle (Patient + Encounter + 2 Observations)
+// to the system endpoint — exactly the path the seeder uses, exercising the
+// transaction-bundle endpoint (PR #165). New random resources each time. The
+// snapshot is restored before each concurrency level, so every level measures write
+// throughput on top of the same seeded baseline. One level per run.
 import http from 'k6/http';
 import exec from 'k6/execution';
 import {
-  BASE, JSON_HEADERS, constantArrival, thresholds, record, summary, SUMMARY_TREND_STATS,
+  BASE, JSON_HEADERS, constantVus, thresholds, record, summary, SUMMARY_TREND_STATS,
 } from './lib/common.js';
 
 export const options = {
-  scenarios: constantArrival('ingest'),
-  thresholds: thresholds(false),
+  scenarios: constantVus('ingest'),
+  thresholds: thresholds(),
   summaryTrendStats: SUMMARY_TREND_STATS,
 };
 

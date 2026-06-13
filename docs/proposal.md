@@ -136,11 +136,18 @@ Per server, per scenario:
 6. **Repeat N ≥ 3 times** per (server, scenario); report **median + min/max or 95% CI**.
    Single runs are noise.
 
-**Load model — open, not closed.** Use a **constant-arrival-rate** (open-model) executor so
-a slow server doesn't artificially throttle the offered load. This avoids **coordinated
-omission** — the #1 way naive benchmarks lie about tail latency. Tool: **k6**
-(`constant-arrival-rate` executor) — scriptable in JS, native headless, native percentile
+**Load model.** Tool: **k6** — scriptable in JS, native headless, native percentile
 output, first-class Prometheus/InfluxDB push for centralized reporting.
+
+> **Superseded — see [`load-model.md`](load-model.md).** This proposal originally
+> specified an open (`constant-arrival-rate`) model to avoid coordinated omission. The
+> implemented benchmark uses a **closed model: a concurrency sweep** (fixed VUs per
+> level, `constant-vus`), because "throughput & latency at N concurrent clients" is the
+> widely-understood comparison and makes throughput a directly-measured, fair output. The
+> known trade-off — closed-model tail latency reads optimistically once a server is past
+> its knee (coordinated omission) — is handled explicitly: throughput (CO-immune) is the
+> headline, latency percentiles are labeled closed-model, and the SLO is read off the
+> pre-knee region. See `load-model.md` for the full rationale.
 
 **Isolation rules:**
 - Load generator on a **separate host** from the SUT (otherwise you measure the generator's

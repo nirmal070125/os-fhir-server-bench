@@ -55,43 +55,18 @@ export function record(res, op, expectStatus) {
   }
 }
 
-// ---- executors ------------------------------------------------------------
-// Constant arrival rate (open model): k6 issues `rate` iterations/sec
-// regardless of how long each takes — the correct shape for steady-state.
-export function constantArrival(name) {
+// ---- executor -------------------------------------------------------------
+// Closed model: VUS concurrent clients, each looping send -> await reply -> send
+// next (no think-time). Concurrency is the INPUT we set exactly; throughput is the
+// server's measured output. We sweep VUS across a ladder (one level per run) — see
+// docs/load-model.md. A VU never fires its next request until the previous reply
+// returns, so there is no VU pool to exhaust and no dropped-iteration artifact.
+export function constantVus(name) {
   return {
     [name]: {
-      executor: 'constant-arrival-rate',
-      rate: num(__ENV.RATE, 100),
-      timeUnit: '1s',
+      executor: 'constant-vus',
+      vus: num(__ENV.VUS, 1),
       duration: __ENV.DURATION || '60s',
-      preAllocatedVUs: num(__ENV.PREALLOCATED_VUS, 50),
-      maxVUs: num(__ENV.MAX_VUS, 500),
-      exec: 'default',
-    },
-  };
-}
-
-// Ramping arrival rate: step the offered load up until the SLO threshold trips.
-// With abortOnFail on the thresholds, the run stops at the breakpoint — the last
-// sustained step approximates max sustainable throughput.
-export function rampingArrival(name) {
-  const start = num(__ENV.START_RATE, 50);
-  const step = num(__ENV.STEP_RATE, 50);
-  const max = num(__ENV.MAX_RATE, 2000);
-  const stepDur = __ENV.STEP_DURATION || '30s';
-  const stages = [];
-  for (let r = start; r <= max; r += step) {
-    stages.push({ target: r, duration: stepDur });
-  }
-  return {
-    [name]: {
-      executor: 'ramping-arrival-rate',
-      startRate: start,
-      timeUnit: '1s',
-      stages,
-      preAllocatedVUs: num(__ENV.PREALLOCATED_VUS, 100),
-      maxVUs: num(__ENV.MAX_VUS, 2000),
       exec: 'default',
     },
   };
@@ -102,16 +77,12 @@ export function rampingArrival(name) {
 export const SUMMARY_TREND_STATS = ['avg', 'min', 'med', 'p(50)', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)', 'max'];
 
 // ---- thresholds -----------------------------------------------------------
-// For saturation (abort=true) the breakpoint is driven by LATENCY (p99): the
-// knee where the server stops keeping up is the real "max sustainable throughput"
-// signal. We deliberately do NOT abort on http_req_failed: it's a *cumulative*
-// rate, so a single transient connection reset early in the ramp (~1/500 reqs =
-// 0.2%) would falsely trip the 0.1% SLO and abort at a bogus rate. The error rate
-// is still measured and thresholded (so it shows in the report / fails the SLO
-// line), just not used to abort the ramp.
-export function thresholds(abort = false) {
+// Pure pass/fail signal for the SLO line — never aborts. Each concurrency level
+// runs to completion; report.py finds the knee (peak throughput) and the highest
+// level still under the p99 SLO from the measured numbers across the sweep.
+export function thresholds() {
   return {
-    http_req_duration: [{ threshold: `p(99)<${P99_MS}`, abortOnFail: abort, delayAbortEval: '15s' }],
+    http_req_duration: [`p(99)<${P99_MS}`],
     http_req_failed: [`rate<${MAX_ERROR_RATE}`],
     fhir_errors: [`rate<${MAX_ERROR_RATE}`],
   };
@@ -166,8 +137,9 @@ export function summary(scenarioName) {
     const p50 = dur['p(50)'] !== undefined ? dur['p(50)'] : (dur.med || 0);
     out.stdout =
       `\n${scenarioName}: ` +
+      `vus=${__ENV.VUS || '?'} ` +
       `reqs=${(m.http_reqs && m.http_reqs.values.count) || 0} ` +
-      `rate=${((m.http_reqs && m.http_reqs.values.rate) || 0).toFixed(1)}/s ` +
+      `thrpt=${((m.http_reqs && m.http_reqs.values.rate) || 0).toFixed(1)}/s ` +
       `p50=${p50.toFixed(1)}ms ` +
       `p99=${(dur['p(99)'] || 0).toFixed(1)}ms ` +
       `p99.9=${(dur['p(99.9)'] || 0).toFixed(1)}ms ` +
