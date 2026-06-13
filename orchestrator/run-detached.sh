@@ -118,7 +118,7 @@ export SSH_OPTS='-i /home/$USER/.ssh/bench_ctrl -o StrictHostKeyChecking=accept-
 [[ -n "$cache_sas" ]] && exports+="
 export BENCH_CACHE_SAS='$cache_sas'"
 for v in SIZE REPS WARMUP_S MEASURE_S COOLDOWN_S SCENARIOS SEED_CONCURRENCY \
-         START_RATE STEP_RATE STEP_DURATION MAX_RATE; do
+         RATE_LEVELS; do
   [[ -n "${!v:-}" ]] && exports+="
 export $v='${!v}'"
 done

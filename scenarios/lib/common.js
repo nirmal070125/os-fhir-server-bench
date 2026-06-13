@@ -55,9 +55,21 @@ export function record(res, op, expectStatus) {
   }
 }
 
-// ---- executors ------------------------------------------------------------
-// Constant arrival rate (open model): k6 issues `rate` iterations/sec
-// regardless of how long each takes — the correct shape for steady-state.
+// ---- executor -------------------------------------------------------------
+// Open model: k6 issues RATE iterations/sec on a clock, independent of how fast the
+// server responds. The OFFERED RATE is the input we set exactly; the server either
+// keeps up (achieved throughput ≈ offered, latency flat) or falls behind (latency
+// climbs, backlog grows). We sweep RATE across a ladder (one level per run) — see
+// docs/load-model.md. This avoids coordinated omission: a slow response can't
+// throttle the offered load, so the tail latency stays honest.
+//
+// VU sizing: the executor needs a free VU to hold each in-flight request. Required
+// VUs ≈ RATE × latency_seconds. preAllocatedVUs covers up to ~the SLO (so under-SLO
+// operation never waits on mid-test allocation); maxVUs gives headroom to ~3 s of
+// latency. If even that is exhausted (server deep in overload), k6 emits
+// dropped_iterations — report.py flags those levels as "offered rate not delivered"
+// rather than mistaking the load generator's ceiling for the server's. run.sh
+// computes PREALLOCATED_VUS/MAX_VUS from the rate; these are just the defaults.
 export function constantArrival(name) {
   return {
     [name]: {
@@ -72,46 +84,17 @@ export function constantArrival(name) {
   };
 }
 
-// Ramping arrival rate: step the offered load up until the SLO threshold trips.
-// With abortOnFail on the thresholds, the run stops at the breakpoint — the last
-// sustained step approximates max sustainable throughput.
-export function rampingArrival(name) {
-  const start = num(__ENV.START_RATE, 50);
-  const step = num(__ENV.STEP_RATE, 50);
-  const max = num(__ENV.MAX_RATE, 2000);
-  const stepDur = __ENV.STEP_DURATION || '30s';
-  const stages = [];
-  for (let r = start; r <= max; r += step) {
-    stages.push({ target: r, duration: stepDur });
-  }
-  return {
-    [name]: {
-      executor: 'ramping-arrival-rate',
-      startRate: start,
-      timeUnit: '1s',
-      stages,
-      preAllocatedVUs: num(__ENV.PREALLOCATED_VUS, 100),
-      maxVUs: num(__ENV.MAX_VUS, 2000),
-      exec: 'default',
-    },
-  };
-}
-
 // Percentiles to compute in the end-of-test summary. k6's default is only
 // p(90)/p(95); the methodology calls for p50–p99.9, so request them explicitly.
 export const SUMMARY_TREND_STATS = ['avg', 'min', 'med', 'p(50)', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)', 'max'];
 
 // ---- thresholds -----------------------------------------------------------
-// For saturation (abort=true) the breakpoint is driven by LATENCY (p99): the
-// knee where the server stops keeping up is the real "max sustainable throughput"
-// signal. We deliberately do NOT abort on http_req_failed: it's a *cumulative*
-// rate, so a single transient connection reset early in the ramp (~1/500 reqs =
-// 0.2%) would falsely trip the 0.1% SLO and abort at a bogus rate. The error rate
-// is still measured and thresholded (so it shows in the report / fails the SLO
-// line), just not used to abort the ramp.
-export function thresholds(abort = false) {
+// Pure pass/fail signal for the SLO line — never aborts. Each concurrency level
+// runs to completion; report.py finds the knee (peak throughput) and the highest
+// level still under the p99 SLO from the measured numbers across the sweep.
+export function thresholds() {
   return {
-    http_req_duration: [{ threshold: `p(99)<${P99_MS}`, abortOnFail: abort, delayAbortEval: '15s' }],
+    http_req_duration: [`p(99)<${P99_MS}`],
     http_req_failed: [`rate<${MAX_ERROR_RATE}`],
     fhir_errors: [`rate<${MAX_ERROR_RATE}`],
   };
@@ -163,15 +146,17 @@ export function summary(scenarioName) {
     const m = data.metrics || {};
     const dur = m.http_req_duration && m.http_req_duration.values ? m.http_req_duration.values : {};
     const failed = m.http_req_failed && m.http_req_failed.values ? m.http_req_failed.values : {};
+    const dropped = m.dropped_iterations && m.dropped_iterations.values ? (m.dropped_iterations.values.count || 0) : 0;
     const p50 = dur['p(50)'] !== undefined ? dur['p(50)'] : (dur.med || 0);
     out.stdout =
       `\n${scenarioName}: ` +
-      `reqs=${(m.http_reqs && m.http_reqs.values.count) || 0} ` +
-      `rate=${((m.http_reqs && m.http_reqs.values.rate) || 0).toFixed(1)}/s ` +
+      `offered=${__ENV.RATE || '?'}/s ` +
+      `achieved=${((m.http_reqs && m.http_reqs.values.rate) || 0).toFixed(1)}/s ` +
       `p50=${p50.toFixed(1)}ms ` +
       `p99=${(dur['p(99)'] || 0).toFixed(1)}ms ` +
       `p99.9=${(dur['p(99.9)'] || 0).toFixed(1)}ms ` +
-      `err=${(((failed.rate) || 0) * 100).toFixed(3)}%\n`;
+      `err=${(((failed.rate) || 0) * 100).toFixed(3)}% ` +
+      `dropped=${dropped}\n`;
     return out;
   };
 }

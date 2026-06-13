@@ -43,11 +43,11 @@ jobs:
           mkdir -p dataset/snapshots
           dataset/snapshot_postgres.sh dataset/snapshots/fhir-server-go-medium.dump
 
-      - name: Orchestrate (read-mix + ingest, 1 rep, short)
+      - name: Orchestrate (read-mix + ingest, 1 rep, short, offered rate [50 200]/s)
         run: |
           export PGHOST=localhost PGPORT=5432 PGUSER=fhir PGPASSWORD=fhir PGDATABASE=fhirdb
           SKIP_BUILD=1 KEEP_UP=1 REPS=1 WARMUP_S=5 MEASURE_S=15 COOLDOWN_S=0 \
-          SCENARIOS="read-mix ingest" POOL_SIZE=200 \
+          SCENARIOS="read-mix ingest" POOL_SIZE=200 RATE_LEVELS="50 200" \
             orchestrator/orchestrate.sh run
 
       - name: Generate report

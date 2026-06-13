@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
 """Generate the comparison report from results/.
 
-Reads every results/<server>/run-manifest.json and the per-rep k6 summaries at
-results/<server>/<scenario>/rep-*/summary.json, aggregates across repetitions
-(median + min/max), and writes:
+Open model: each workload is swept across a ladder of offered rates (req/s, k6
+constant-arrival-rate). Reads every results/<server>/run-manifest.json and the
+per-level k6 summaries at results/<server>/<scenario>/rep-*/rate-*/summary.json,
+aggregates across repetitions (median + min/max) per offered rate, and writes:
 
-  results/report.md   human-readable comparison (one table per scenario)
-  results/report.csv  flat rows for any downstream analysis
+  results/report.md   human-readable comparison: a headline (max sustainable
+                      throughput) + a latency-vs-rate curve per server, per scenario
+  results/report.csv  one row per (scenario, server, offered_rate) for plotting
 
-Fairness metric = throughput per vCPU (measured req/s ÷ sut_cpus from the manifest),
-so servers given the same CPU envelope are compared on equal footing. SLO pass/fail
-uses the manifest's slo (p99_ms AND max_error_rate). No third-party deps — stdlib only.
+Headline = MAX SUSTAINABLE THROUGHPUT: the highest offered rate the server keeps up
+with (achieved ≈ offered, no dropped iterations) while p99 < SLO and errors < max.
+Open model keeps tail latency honest (no coordinated omission); dropped_iterations
+flags any level where the LOAD GENERATOR couldn't deliver the offered rate, so its
+ceiling is never mistaken for the server's. Fairness metric = throughput per vCPU
+(÷ sut_cpus from the manifest). No third-party deps — stdlib only.
 """
 import csv
 import json
-import os
 import statistics
 import sys
 from pathlib import Path
 
 ROOT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "results"
+
+# A level "kept up" if it delivered at least this fraction of the offered rate.
+DELIVERED_FRAC = 0.95
 
 
 def load(p):
@@ -34,55 +41,22 @@ def trend(metric):
 
 
 def rep_row(summary):
-    """Extract the numbers we care about from one rep's k6 summary."""
+    """Extract the numbers we care about from one rep's k6 summary at one rate."""
     m = summary.get("metrics", {})
     dur = trend(m.get("http_req_duration"))
     reqs = (m.get("http_reqs") or {}).get("values", {})
     failed = (m.get("http_req_failed") or {}).get("values", {})
+    dropped = (m.get("dropped_iterations") or {}).get("values", {})
     p50 = dur.get("p(50)", dur.get("med", 0.0))
     return {
-        "rate": reqs.get("rate", 0.0),
-        "count": reqs.get("count", 0),
+        "achieved": reqs.get("rate", 0.0),   # measured completed throughput (req/s)
         "p50": p50,
         "p95": dur.get("p(95)", 0.0),
         "p99": dur.get("p(99)", 0.0),
         "p99_9": dur.get("p(99.9)", 0.0),
         "err": failed.get("rate", 0.0),
-        "dur_s": summary.get("state", {}).get("testRunDurationMs", 0.0) / 1000.0,
+        "dropped": dropped.get("count", 0),
     }
-
-
-def parse_dur(s):
-    """'30s' -> 30.0, '5m' -> 300.0 (Go-ish duration; seconds/minutes only)."""
-    s = str(s).strip()
-    if s.endswith("ms"):
-        return float(s[:-2]) / 1000.0
-    if s.endswith("m"):
-        return float(s[:-1]) * 60.0
-    if s.endswith("s"):
-        return float(s[:-1])
-    return float(s)
-
-
-def max_sustainable(dur_s, ramp):
-    """Max sustainable throughput from a saturation rep.
-
-    saturation ramps the offered rate up and aborts (abortOnFail) ~abort_delay_s
-    after p99/error first breaches the SLO, so the run duration tells us which ramp
-    stage it reached -> the offered rate just before the breach. Returns
-    (rate_req_s, capped) where capped=True means it never breached (sustained the
-    whole ramp, so the true ceiling is >= max_rate). Measurement is untouched; this
-    is pure post-processing of the run duration.
-    """
-    start, step, maxr = ramp["start_rate"], ramp["step_rate"], ramp["max_rate"]
-    step_dur = parse_dur(ramp["step_duration"])
-    abort = ramp.get("abort_delay_s", 10)
-    n_stages = (maxr - start) // step + 1
-    full = n_stages * step_dur
-    if dur_s >= full * 0.98:           # ran the whole ramp without breaching
-        return (maxr, True)
-    stage = max(0, int((dur_s - abort) // step_dur))
-    return (min(maxr, start + step * stage), False)
 
 
 def agg(vals):
@@ -93,7 +67,7 @@ def agg(vals):
 
 
 def discover():
-    """server -> {manifest, scenarios{name -> [rep_row,...]}}"""
+    """server -> {manifest, scenarios{name -> {offered_rate:int -> [rep_row,...]}}}"""
     out = {}
     if not RESULTS.exists():
         return out
@@ -104,15 +78,38 @@ def discover():
         for scen_dir in sorted(mf.parent.iterdir()):
             if not scen_dir.is_dir():
                 continue
-            reps = [rep_row(load(s)) for s in sorted(scen_dir.glob("rep-*/summary.json"))]
-            if reps:
-                scenarios[scen_dir.name] = reps
+            levels = {}  # offered_rate -> [rep_row, ...]
+            for r_dir in sorted(scen_dir.glob("rep-*/rate-*")):
+                try:
+                    rate = int(r_dir.name.split("-", 1)[1])
+                except (IndexError, ValueError):
+                    continue
+                sfile = r_dir / "summary.json"
+                if sfile.exists():
+                    levels.setdefault(rate, []).append(rep_row(load(sfile)))
+            if levels:
+                scenarios[scen_dir.name] = levels
         out[server] = {"manifest": manifest, "scenarios": scenarios}
     return out
 
 
-def fmt(x, unit=""):
-    return f"{x:.1f}{unit}" if isinstance(x, float) else f"{x}{unit}"
+def level_stats(offered, reps):
+    """Median (+ spread) across reps for one offered-rate level."""
+    ach_med, ach_lo, ach_hi = agg([r["achieved"] for r in reps])
+    dropped_max = max((r["dropped"] for r in reps), default=0)
+    return {
+        "offered": offered,
+        "ach_med": ach_med, "ach_lo": ach_lo, "ach_hi": ach_hi,
+        "p50": agg([r["p50"] for r in reps])[0],
+        "p95": agg([r["p95"] for r in reps])[0],
+        "p99": agg([r["p99"] for r in reps])[0],
+        "p99_9": agg([r["p99_9"] for r in reps])[0],
+        "err_med": agg([r["err"] for r in reps])[0],
+        "err_hi": agg([r["err"] for r in reps])[2],
+        "dropped": dropped_max,
+        # "kept up": delivered the offered rate without dropping iterations
+        "delivered": dropped_max == 0 and ach_med >= DELIVERED_FRAC * offered,
+    }
 
 
 def main():
@@ -121,15 +118,17 @@ def main():
         print("no results found under results/ — run the benchmark first", file=sys.stderr)
         sys.exit(1)
 
-    # provenance is taken from the first server's manifest (limits/slo/dataset are shared).
     any_m = next(iter(data.values()))["manifest"]
     slo = any_m.get("slo", {})
     p99_slo = slo.get("p99_ms", 500)
     err_slo = slo.get("max_error_rate", 0.001)
     p99_by_scen = slo.get("p99_ms_by_scenario", {})
-    # Each scenario is judged against its own p99 bar (e.g. ingest writes are heavier).
+
     def p99_slo_for(scen):
         return p99_by_scen.get(scen, p99_slo)
+
+    def passes(s, scen_p99_slo):
+        return s["delivered"] and s["p99"] < scen_p99_slo and s["err_hi"] < err_slo
 
     all_scenarios = sorted({s for v in data.values() for s in v["scenarios"]})
 
@@ -142,113 +141,111 @@ def main():
         ok_b, tot_b, fail_b = ds.get("bundles_ok", 0), ds["bundles_total"], ds.get("bundles_failed", 0)
         seed_note = f" — {ok_b:,}/{tot_b:,} bundles loaded" + (f" ({fail_b:,} failed at seed, {ds.get('success_pct','?')}%)" if fail_b else " (all)")
     md.append(
+        f"- **Load model:** {any_m.get('load_model','open (constant-arrival-rate sweep)')} — "
+        f"offered rate (req/s) is swept; tail latency is coordinated-omission-free  \n"
         f"- **Dataset:** {ds.get('size','?')} (hash `{str(ds.get('hash',''))[:12]}`){seed_note}  \n"
         f"- **Envelope (per server):** {lim.get('sut_cpus','?')} vCPU / {lim.get('sut_mem','?')} app, "
         f"{lim.get('db_cpus','?')} vCPU / {lim.get('db_mem','?')} db  \n"
         f"- **SLO:** error rate < {err_slo}; p99 < {p99_slo} ms (default/reads)"
         + (f", overrides: {', '.join(f'{k} {v}ms' for k, v in p99_by_scen.items() if v != p99_slo)}" if any(v != p99_slo for v in p99_by_scen.values()) else "")
-        + " — per-table below  \n"
+        + "  \n"
         f"- **Reps:** {any_m.get('run',{}).get('repetitions','?')} "
-        f"(measure {any_m.get('run',{}).get('measure_s','?')}s, warm-up "
+        f"(measure {any_m.get('run',{}).get('measure_s','?')}s/level, warm-up "
         f"{any_m.get('run',{}).get('warmup_s','?')}s discarded)  \n"
         f"- **k6:** {any_m.get('k6_version','?')}  ·  **bench commit:** {any_m.get('bench_repo_sha','?')}\n"
     )
 
     csv_rows = []
     for scen in all_scenarios:
-        md.append(f"\n## {scen}\n")
-
-        # saturation reports MAX SUSTAINABLE THROUGHPUT (offered rate at SLO breach),
-        # not pass/fail — a ramp is meant to breach the SLO at its top step.
-        if scen == "saturation":
-            md.append("| Server | Max sustainable (req/s) | per vCPU | aggregate p99 (ms) | Error rate |")
-            md.append("|---|---|---|---|---|")
-            sat = []
-            for server, v in data.items():
-                reps = v["scenarios"].get(scen)
-                if not reps:
-                    continue
-                cpus = v["manifest"].get("limits", {}).get("sut_cpus", 1) or 1
-                ramp = v["manifest"].get("saturation_ramp")
-                if not ramp:
-                    continue  # older manifest without ramp params
-                rates, capped = [], False
-                for r in reps:
-                    rate, cap = max_sustainable(r["dur_s"], ramp)
-                    rates.append(rate)
-                    capped = capped or cap
-                ms_med = statistics.median(rates)
-                p99_med, _, _ = agg([r["p99"] for r in reps])
-                err_med, _, _ = agg([r["err"] for r in reps])
-                sat.append((ms_med, server, cpus, ms_med, capped, p99_med, err_med))
-            sat.sort(reverse=True)
-            for (_, server, cpus, ms_med, capped, p99_med, err_med) in sat:
-                label = f"≥ {ms_med:.0f} (no breach)" if capped else f"~{ms_med:.0f}"
-                md.append(f"| {server} | {label} | {ms_med/cpus:.0f} | {p99_med:.1f} | {err_med*100:.3f}% |")
-                csv_rows.append({
-                    "scenario": scen, "server": server, "sut_cpus": cpus,
-                    "throughput_rps": round(ms_med, 2),
-                    "throughput_per_vcpu": round(ms_med / cpus, 2),
-                    "p50_ms": "", "p95_ms": "",
-                    "p99_ms": round(p99_med, 2), "p99_9_ms": "",
-                    "error_rate": round(err_med, 6), "slo_pass": "max-sustainable",
-                })
-            continue
-
         scen_p99_slo = p99_slo_for(scen)
-        md.append(f"_SLO: p99 < {scen_p99_slo} ms AND error rate < {err_slo}_\n")
-        md.append("| Server | Throughput (req/s) | Thru/vCPU | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | Error rate | SLO |")
-        md.append("|---|---|---|---|---|---|---|---|---|")
-        # rank by median throughput desc
-        ranked = []
+        md.append(f"\n## {scen}\n")
+        md.append(
+            f"_Open model — offered rate (req/s k6 issues on a clock) is swept. "
+            f"**Achieved** is the server's completed throughput: ≈ offered while it keeps "
+            f"up, less once it can't. Latency is coordinated-omission-free. `dropped` > 0 "
+            f"means the load generator couldn't deliver the offered rate (server saturated). "
+            f"SLO: p99 < {scen_p99_slo} ms AND error rate < {err_slo} AND offered rate "
+            f"delivered._\n"
+        )
+
+        # per-server level stats (sorted by offered rate)
+        server_levels = {}
         for server, v in data.items():
-            reps = v["scenarios"].get(scen)
-            if not reps:
+            levels = v["scenarios"].get(scen)
+            if not levels:
                 continue
             cpus = v["manifest"].get("limits", {}).get("sut_cpus", 1) or 1
-            rate_med, _, _ = agg([r["rate"] for r in reps])
-            p50_med, _, _ = agg([r["p50"] for r in reps])
-            p95_med, _, _ = agg([r["p95"] for r in reps])
-            p99_med, p99_lo, p99_hi = agg([r["p99"] for r in reps])
-            p999_med, _, _ = agg([r["p99_9"] for r in reps])
-            err_med, _, err_hi = agg([r["err"] for r in reps])
-            passed = (p99_med < scen_p99_slo) and (err_hi < err_slo)
-            ranked.append((rate_med, server, cpus, rate_med, p50_med, p95_med,
-                           p99_med, p99_lo, p99_hi, p999_med, err_med, passed))
-        ranked.sort(reverse=True)
-        for (_, server, cpus, rate_med, p50_med, p95_med, p99_med, p99_lo, p99_hi,
-             p999_med, err_med, passed) in ranked:
-            md.append(
-                f"| {server} | {rate_med:.1f} | {rate_med/cpus:.1f} | {p50_med:.1f} | "
-                f"{p95_med:.1f} | {p99_med:.1f} (±{(p99_hi-p99_lo)/2:.1f}) | {p999_med:.1f} | "
-                f"{err_med*100:.3f}% | {'✅ PASS' if passed else '❌ FAIL'} |"
-            )
-            csv_rows.append({
-                "scenario": scen, "server": server, "sut_cpus": cpus,
-                "throughput_rps": round(rate_med, 2),
-                "throughput_per_vcpu": round(rate_med / cpus, 2),
-                "p50_ms": round(p50_med, 2), "p95_ms": round(p95_med, 2),
-                "p99_ms": round(p99_med, 2), "p99_9_ms": round(p999_med, 2),
-                "error_rate": round(err_med, 6), "slo_pass": passed,
-            })
+            rows = [level_stats(r, levels[r]) for r in sorted(levels)]
+            server_levels[server] = {"cpus": cpus, "levels": rows}
 
-    md.append("\n> Throughput/error are medians across reps; p99 shows ±half-spread. "
-              "Throughput/vCPU is the fairness-normalized headline. "
-              "**saturation** reports max sustainable throughput — the offered rate just "
-              "before p99/error breached the SLO (`≥ X (no breach)` means it sustained the "
-              "whole ramp); its p99 is the aggregate over the full ramp, expected to be high.\n")
+        # ---- headline: max sustainable throughput -----------------------------------
+        md.append("### Max sustainable throughput\n")
+        md.append("| Server | Max sustainable (req/s) | per vCPU | p99 there (ms) | Error rate |")
+        md.append("|---|---|---|---|---|")
+        headline = []
+        for server, sl in server_levels.items():
+            cpus, rows = sl["cpus"], sl["levels"]
+            ok = [s for s in rows if passes(s, scen_p99_slo)]
+            if not ok:
+                # never sustained even the lowest offered rate under SLO
+                headline.append((-1.0, server, cpus, "— (SLO missed at lowest rate)", 0.0, 0.0))
+                continue
+            best = max(ok, key=lambda s: s["offered"])
+            never_breached = best is rows[-1]
+            label = f"≥ {best['offered']:.0f} (no breach)" if never_breached else f"{best['offered']:.0f}"
+            headline.append((best["offered"], server, cpus, label, best["p99"], best["err_med"]))
+        headline.sort(reverse=True)
+        for (sortkey, server, cpus, label, p99v, errv) in headline:
+            per_vcpu = f"{sortkey/cpus:.0f}" if sortkey > 0 else "—"
+            md.append(f"| {server} | {label} | {per_vcpu} | {p99v:.1f} | {errv*100:.3f}% |")
+
+        # ---- per-server latency-vs-rate curve ---------------------------------------
+        for server, sl in server_levels.items():
+            cpus, rows = sl["cpus"], sl["levels"]
+            md.append(f"\n### {server} — latency vs offered rate\n")
+            md.append("| Offered (req/s) | Achieved (req/s) | Ach/vCPU | p50 (ms) | p95 (ms) | p99 (ms) | p99.9 (ms) | Error rate | Dropped | SLO |")
+            md.append("|---|---|---|---|---|---|---|---|---|---|")
+            for s in rows:
+                ok = passes(s, scen_p99_slo)
+                spread = (s["ach_hi"] - s["ach_lo"]) / 2
+                drop_cell = f"{s['dropped']:.0f}" if s["dropped"] else "0"
+                md.append(
+                    f"| {s['offered']:.0f} | {s['ach_med']:.1f} (±{spread:.1f}) | {s['ach_med']/cpus:.1f} | "
+                    f"{s['p50']:.1f} | {s['p95']:.1f} | {s['p99']:.1f} | {s['p99_9']:.1f} | "
+                    f"{s['err_med']*100:.3f}% | {drop_cell} | {'✅' if ok else '❌'} |"
+                )
+                csv_rows.append({
+                    "scenario": scen, "server": server, "sut_cpus": cpus,
+                    "offered_rps": s["offered"],
+                    "achieved_rps": round(s["ach_med"], 2),
+                    "achieved_per_vcpu": round(s["ach_med"] / cpus, 2),
+                    "p50_ms": round(s["p50"], 2), "p95_ms": round(s["p95"], 2),
+                    "p99_ms": round(s["p99"], 2), "p99_9_ms": round(s["p99_9"], 2),
+                    "error_rate": round(s["err_med"], 6),
+                    "dropped_iterations": int(s["dropped"]),
+                    "slo_pass": ok,
+                })
+
+    md.append(
+        "\n> Achieved throughput is the median across reps (±half-spread); per-vCPU is the "
+        "fairness-normalized view. **Max sustainable throughput** is the highest offered "
+        "rate the server delivered while keeping p99 under the SLO (`≥ X (no breach)` means "
+        "it sustained the whole ladder — raise the ladder to find the real ceiling). Latency "
+        "is coordinated-omission-free (open model); a non-zero `Dropped` column means the "
+        "load generator hit its VU ceiling at that rate (server already saturated) — see "
+        "docs/load-model.md.\n"
+    )
 
     report_md = RESULTS / "report.md"
     report_md.write_text("\n".join(md) + "\n")
     with open(RESULTS / "report.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(csv_rows[0].keys()) if csv_rows else
-                           ["scenario", "server"])
+                           ["scenario", "server", "offered_rps"])
         w.writeheader()
         w.writerows(csv_rows)
 
     print(f"wrote {report_md}")
     print(f"wrote {RESULTS / 'report.csv'}")
-    # echo the report to stdout so a CI log / headless run shows it
     print("\n" + report_md.read_text())
 
 

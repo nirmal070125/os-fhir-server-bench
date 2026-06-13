@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Run ONE scenario once against a FHIR base URL, with all knobs pulled from
-# bench.config.yaml (workload.* + slo.*). This is the standalone/local entry; the
-# orchestrator (plan step 6) wraps this with warm-up, repetitions, and Prometheus
-# output. Metrics for THIS invocation land in results/ as line-delimited JSON +
-# a summary file.
-#   scenarios/run.sh <read-mix|ingest|saturation> <fhir_base_url> [duration]
-#   e.g. scenarios/run.sh read-mix http://localhost:9090/fhir/r4 60s
+# Run ONE workload at ONE offered rate against a FHIR base URL (open model:
+# constant-arrival-rate). SLO knobs come from bench.config.yaml (slo.*); the rate
+# level is passed in via RATE (the orchestrator sweeps the bench.config.yaml ladder).
+# This is the standalone/local entry; the orchestrator wraps it with restore,
+# warm-up, repetitions, and Prometheus output. Metrics for THIS invocation land in
+# results/ as line-delimited JSON + a summary file.
+#   RATE=<req/s> scenarios/run.sh <read-mix|ingest> <fhir_base_url> [duration]
+#   e.g. RATE=400 scenarios/run.sh read-mix http://localhost:9090/fhir/r4 60s
 set -euo pipefail
-SCN="${1:?usage: run.sh <scenario> <base_url> [duration]}"
-BASE_URL="${2:?usage: run.sh <scenario> <base_url> [duration]}"
+SCN="${1:?usage: RATE=<req/s> run.sh <scenario> <base_url> [duration]}"
+BASE_URL="${2:?usage: RATE=<req/s> run.sh <scenario> <base_url> [duration]}"
 DURATION="${3:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -16,58 +17,41 @@ cfg() { "$ROOT/bin/cfg" "$1"; }
 
 command -v k6 >/dev/null || { echo "k6 not found (installed on the loadgen VM by cloud-init)"; exit 1; }
 
+case "$SCN" in
+  read-mix|ingest) SCRIPT="$HERE/$SCN.js" ;;
+  *) echo "unknown scenario: $SCN (read-mix|ingest)"; exit 1 ;;
+esac
+
 export BASE_URL
 # Per-scenario p99 SLO (e.g. ingest is heavier) overriding the read-oriented default.
 export P99_MS="$(cfg "slo.per_scenario.\"$SCN\".p99_ms" 2>/dev/null || cfg slo.p99_ms)"
 export MAX_ERROR_RATE="$(cfg slo.max_error_rate)"
 
-# CAPTURE=0 (warm-up, discarded) vs 1 (measured). Resolved early because saturation
-# warms up differently from how it measures (see below).
-CAPTURE="${CAPTURE:-1}"
+# Offered rate (req/s) — the level k6 tries to issue. One level per run.
+export RATE="${RATE:?RATE (req/s) is required — the offered-rate level to measure}"
+export DURATION="${DURATION:-${MEASURE_S:-600}s}"
 
-W="workload.\"$SCN\""
-case "$SCN" in
-  read-mix|ingest)
-    export RATE="$(cfg "$W.rate")"
-    export PREALLOCATED_VUS="$(cfg "$W.preallocated_vus")"
-    export MAX_VUS="$(cfg "$W.max_vus")"
-    export DURATION="${DURATION:-${MEASURE_S:-600}s}"
-    SCRIPT="$HERE/$SCN.js"
-    ;;
-  saturation)
-    export PREALLOCATED_VUS="$(cfg "$W.preallocated_vus")"
-    export MAX_VUS="$(cfg "$W.max_vus")"
-    SCRIPT="$HERE/saturation.js"
-    if [[ "$CAPTURE" == "1" ]]; then
-      # MEASURED: the ramp (start_rate -> max_rate). Env-overridable (env > config) so a
-      # smoke run can truncate it (e.g. MAX_RATE=300 STEP_DURATION=5s) without touching
-      # bench.config.yaml; benchmark uses the full config ramp.
-      export START_RATE="${START_RATE:-$(cfg "$W.start_rate")}"
-      export STEP_RATE="${STEP_RATE:-$(cfg "$W.step_rate")}"
-      export STEP_DURATION="${STEP_DURATION:-$(cfg "$W.step_duration")}"
-      export MAX_RATE="${MAX_RATE:-$(cfg "$W.max_rate")}"
-    else
-      # WARM-UP: a short CONSTANT load at the start rate — warms JIT/cache/pools
-      # without re-running (and discarding) the entire ramp. Re-running the full
-      # 20-min ramp as warm-up was ~1h of pure waste across reps; the measured ramp
-      # is identical either way, so this changes timing only, not the result.
-      export WARMUP=1
-      export RATE="$(cfg "$W.start_rate")"
-      export DURATION="${DURATION:-90s}"
-    fi
-    ;;
-  *) echo "unknown scenario: $SCN (read-mix|ingest|saturation)"; exit 1 ;;
-esac
+# VU headroom for the open model: the executor needs a free VU per in-flight request
+# (required VUs ≈ RATE × latency_s). preAllocatedVUs covers up to ~the p99 SLO so
+# under-SLO operation never waits on mid-test allocation; maxVUs gives headroom to
+# ~3 s of latency. Past that (deep overload) k6 emits dropped_iterations, which
+# report.py flags — so the loadgen's ceiling is never mistaken for the server's.
+# Env-overridable (orchestrator/smoke may pin them).
+export PREALLOCATED_VUS="${PREALLOCATED_VUS:-$(( RATE / 2 > 50 ? RATE / 2 : 50 ))}"
+export MAX_VUS="${MAX_VUS:-$(( RATE * 3 > 200 ? RATE * 3 : 200 ))}"
+
+# CAPTURE=0 (warm-up, discarded) vs 1 (measured). Same RATE either way — the warm-up
+# is just a shorter window at the same offered rate to warm JIT/cache/pools.
+CAPTURE="${CAPTURE:-1}"
 
 # OUTDIR lets the orchestrator place captured output.
 OUTDIR="${OUTDIR:-$ROOT/results/$SCN}"
 mkdir -p "$OUTDIR"
 
-# k6 exit codes: 0 = all thresholds passed; 99 = a threshold was crossed (incl.
-# abortOnFail). Exit 99 is a VALID RESULT — the SLO simply wasn't met (e.g. ingest
-# p99 > target, or saturation hit its latency knee) — and report.py decides pass/fail
-# from the measured numbers. Only OTHER non-zero codes are real errors (couldn't
-# connect, bad script) that should fail the run.
+# k6 exit codes: 0 = all thresholds passed; 99 = a threshold was crossed. Exit 99
+# is a VALID RESULT — the SLO simply wasn't met at this offered rate (expected at the
+# high end of the sweep) — and report.py decides pass/fail from the measured numbers.
+# Only OTHER non-zero codes are real errors (couldn't connect, bad script).
 run_k6() {
   local rc=0
   k6 run "$@" || rc=$?
@@ -78,7 +62,7 @@ run_k6() {
   return 0
 }
 
-echo "==> k6 $SCN -> $BASE_URL (p99<${P99_MS}ms, err<${MAX_ERROR_RATE}, capture=$CAPTURE)"
+echo "==> k6 $SCN @ ${RATE}/s offered (VUs ${PREALLOCATED_VUS}->${MAX_VUS}) -> $BASE_URL (p99<${P99_MS}ms, err<${MAX_ERROR_RATE}, capture=$CAPTURE)"
 if [[ "$CAPTURE" == "1" ]]; then
   export SUMMARY_OUT="$OUTDIR/summary.json"
   OUTS=(--out "json=$OUTDIR/metrics.json")

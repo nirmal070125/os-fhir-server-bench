@@ -142,6 +142,15 @@ omission** — the #1 way naive benchmarks lie about tail latency. Tool: **k6**
 (`constant-arrival-rate` executor) — scriptable in JS, native headless, native percentile
 output, first-class Prometheus/InfluxDB push for centralized reporting.
 
+> **Refined — see [`load-model.md`](load-model.md).** The implemented benchmark keeps this
+> open model but replaces the original single fixed rate per scenario (and the separate
+> ramping `saturation` scenario) with a **stepped offered-rate sweep**: each rate level is
+> a discrete `constant-arrival-rate` run measured to steady state, so we get a clean
+> per-level latency-vs-rate curve (the sweep *is* the saturation curve) and derive max
+> sustainable throughput as the highest rate meeting the SLO. The harness also sizes the
+> VU pool from the rate and flags `dropped_iterations`, so the load generator's ceiling is
+> never mistaken for the server's.
+
 **Isolation rules:**
 - Load generator on a **separate host** from the SUT (otherwise you measure the generator's
   CPU contention).

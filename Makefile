@@ -11,10 +11,10 @@ help: ## Show this help
 
 # ─── primary: run on Azure, laptop-free; report → Blob URL; auto-stops VMs if enabled ───
 
-smoke: provision ## Quick validation run (small data, 1 rep, short windows, truncated saturation) — detached
-	@echo "==> smoke: small / 1 rep / 15s+30s windows / saturation ramp ->300 — detached on the VMs"
+smoke: provision ## Quick validation run (small data, 1 rep, short windows, truncated rate ladder) — detached
+	@echo "==> smoke: small / 1 rep / 15s+30s windows / offered rate [50 200]/s — detached on the VMs"
 	@SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 \
-	   START_RATE=50 STEP_RATE=50 STEP_DURATION=5s MAX_RATE=300 \
+	   RATE_LEVELS="50 200" \
 	   orchestrator/run-detached.sh
 
 benchmark: provision ## The full run (bench.config.yaml: size, reps, windows, full ramp) — detached

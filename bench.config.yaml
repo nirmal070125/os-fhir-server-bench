@@ -121,38 +121,34 @@ servers:
 
 run:
   warmup_s: 90                           # discarded — warms JIT/page cache/pools
-  measure_s: 600                         # the only data that counts
+  measure_s: 600                         # the only data that counts (per concurrency level)
   cooldown_s: 60
   repetitions: 3                         # report median + spread
-  scenarios: [read-mix, ingest, saturation]
+  scenarios: [read-mix, ingest]          # closed-model concurrency sweeps (see docs/load-model.md)
 
-# Per-scenario load shape (open model — arrival rate, NOT VU count, drives load so
-# coordinated omission can't hide). Rates are requests/sec the loadgen TRIES to issue;
-# the SUT either keeps up (steady latency) or queues (latency climbs) — that's the signal.
-# preallocated_vus/max_vus only cap how many in-flight requests k6 may hold open.
+# Open model — the OFFERED RATE (req/s k6 issues on a clock, NOT VU count) is the
+# swept variable; the server either keeps up (achieved ≈ offered, latency flat) or
+# falls behind (latency climbs). We run one rate per measurement window and step
+# through the ladder, so the latency-vs-rate curve shows where each server's knee is.
+# Arrival rate (not VU count) drives load so coordinated omission can't hide tail
+# latency; run.sh sizes the VU pool from the rate and report.py flags any level that
+# dropped iterations (offered rate not delivered). Ladders are log-spaced and extend
+# past where a 4-vCPU server saturates so the knee is bracketed. Override for
+# smoke/iteration with RATE_LEVELS="50 200" (applies to all scenarios).
 workload:
-  read-mix:                # steady, read-dominated real-world traffic at a fixed rate
-    rate: 200              # req/s (constant arrival)
-    preallocated_vus: 100
-    max_vus: 800
-  ingest:                  # sustained writes — POST transaction bundles (PR #165 endpoint)
-    rate: 50               # bundles/s
-    preallocated_vus: 50
-    max_vus: 400
-  saturation:              # ramp rate up until the SLO breaks → max sustainable throughput
-    start_rate: 50         # req/s
-    step_rate: 50          # +50 req/s each step
-    step_duration: 30s
-    max_rate: 2000
-    preallocated_vus: 100
-    max_vus: 2000
+  read-mix:                # read-dominated real-world traffic; read-only (state shared across the sweep)
+    rate_levels: [50, 100, 200, 400, 800, 1600, 3200]   # req/s offered
+  ingest:                  # transaction-bundle writes (PR #165); snapshot restored before each level
+    rate_levels: [10, 25, 50, 100, 200]                 # bundles/s — writes are heavier → lower ceiling
 
-# Pass/fail line for "max sustainable throughput"; full curves are published too.
-# Default p99 is read-oriented (interactive GET/search). Writes are heavier, so
-# per-scenario overrides apply an operation-appropriate bar — set on operation type,
-# NOT to flatter any server, and applied identically to all six.
+# SLO line for the headline "max sustainable throughput" — the highest offered rate
+# the server keeps up with (achieved ≈ offered, no dropped iterations) while p99 < SLO
+# and errors < max; full latency-vs-rate curves are published too. Default p99 is
+# read-oriented (interactive GET/search). Writes are heavier, so per-scenario overrides
+# apply an operation-appropriate bar — set on operation type, NOT to flatter any
+# server, and applied identically to all six.
 slo:
-  p99_ms: 500              # default: reads (read-mix) + the saturation knee
+  p99_ms: 500              # default: reads (read-mix)
   max_error_rate: 0.001
   per_scenario:
     ingest:
