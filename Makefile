@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 INFRA := infra
 
-.PHONY: help check provision teardown clean clean-blob smoke benchmark status report seed run
+.PHONY: help check provision teardown clean clean-blob smoke benchmark status stop report seed run
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -24,6 +24,17 @@ status: ## Show the in-flight run's progress (log tail / DONE)
 	@set -a; . ./.detached.env 2>/dev/null; set +a; \
 	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit \$$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
 	  || echo "no detached run found (.detached.env missing — run 'make smoke' or 'make benchmark')"
+
+stop: ## Stop the in-flight detached run (kill tmux 'bench'); DEALLOCATE=1 also halts VM billing
+	@set -a; . ./.detached.env 2>/dev/null; set +a; \
+	  if [ -z "$${LOADGEN_IP:-}" ]; then echo "no detached run found (.detached.env missing)"; \
+	  else echo "==> stopping run on $$LOADGEN_IP (tmux 'bench')"; \
+	    ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "tmux kill-session -t bench 2>/dev/null; pkill -f k6 || true; pkill -f orchestrate.sh || true" || true; \
+	    echo "run stopped."; fi
+	@if [ "$(DEALLOCATE)" = "1" ]; then \
+	    echo "==> deallocating all VMs (compute billing stops; disks/IPs remain until 'make teardown')"; \
+	    az vm deallocate --ids $$(az vm list -g $$(bin/cfg azure.resource_group) --query '[].id' -o tsv); \
+	  else echo "VMs still running — billing continues. Re-run with DEALLOCATE=1 to halt it, or 'make teardown' to remove."; fi
 
 report: ## Show the latest run's report + run log from Blob (works after auto-stop; pass a run-… prefix to pick one)
 	@bin/fetch-report.sh $(RUN)
