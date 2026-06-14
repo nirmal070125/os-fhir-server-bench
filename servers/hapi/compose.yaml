@@ -31,12 +31,21 @@ services:
       SPRING_DATASOURCE_USERNAME: hapi
       SPRING_DATASOURCE_PASSWORD: hapi
       SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      # --- Fair tuning: HAPI's own documented production guidance, so it gets a fair
+      # shot (charter §1.4 "reasonably-tuned, not hand-tuned-for-us"; configs committed).
+      # JVM heap = 75% of the container limit — container-aware, scales with SUT_MEM.
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+      # DB pool matched to our pgx pool (20) so the pool isn't the differentiator.
+      # (HAPI perf docs: "optimize your database thread pool count".)
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "20"
       # The image's baked application.yaml sets the dialect as a MAP key
       # (spring.jpa.properties.hibernate.dialect = an H2 dialect). Plain env vars
       # can't override a map key, so we override via SPRING_APPLICATION_JSON (high
       # precedence, binds nested keys). Without this, Hibernate emits generic `clob`
-      # DDL that Postgres rejects and the schema is left half-created.
-      SPRING_APPLICATION_JSON: '{"spring.jpa.properties.hibernate.dialect":"ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect"}'
+      # DDL that Postgres rejects and the schema is left half-created. Same mechanism
+      # turns OFF narrative generation (CPU per response, not under test — matching how
+      # we run ours); validation-on-write is already off by default in the starter.
+      SPRING_APPLICATION_JSON: '{"spring.jpa.properties.hibernate.dialect":"ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect","hapi.fhir.narrative_generation_enabled":false}'
     depends_on:
       db:
         condition: service_healthy

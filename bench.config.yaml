@@ -84,13 +84,16 @@ servers:
     # at 10m those could drop with CLIENT-ERR when the box is busy. Doesn't bias the
     # measured runs (reads/small ingests never approach it); it's just a safety ceiling.
     write_timeout: 30m
-  hapi:                                    # HAPI FHIR JPA (Postgres) — boot-verified
-    enabled: false
+  hapi:                                    # HAPI FHIR JPA (Postgres) — the OSS reference comparator
+    enabled: true                          # fhir-server-go vs HAPI (the de-facto reference; same PG backend)
     image: hapiproject/hapi:v7.4.0
     base_path: /fhir
     port: 8080
     db_port: 5532                          # host port for snapshot/restore (PG*)
     health_path: /fhir/metadata
+    # Fair tuning (its own docs' production guidance — see servers/hapi/compose.yaml):
+    # JVM heap = 75% of the container, HikariCP pool = 20 (matches our pgx pool of 20),
+    # narrative generation off (CPU not under test). Validation-on-write stays off, like ours.
   microsoft:                               # Microsoft FHIR Server (SQL Server) — scaffolded
     enabled: false
     image: mcr.microsoft.com/healthcareapis/r4-fhir-server:latest
