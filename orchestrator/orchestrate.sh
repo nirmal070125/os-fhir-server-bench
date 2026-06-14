@@ -163,7 +163,10 @@ phase_seed() {
   # Cache keys: the snapshot depends on the server BUILD (commit) + dataset (size); the
   # dataset depends only on the size name (= its deterministic identity, by convention —
   # change the size name if you change generation params). See dataset/blobcache.sh.
-  commit="$(cfg "servers.$server.commit" 2>/dev/null | cut -c1-12)"; commit="${commit:-nocommit}"
+  # `|| true`: image-based comparators (hapi/blaze/medplum/…) have no `commit` key, so
+  # cfg exits 1 — without the guard, set -euo pipefail aborts the whole run here, before
+  # the `:-nocommit` fallback (this is what silently killed the HAPI run at start).
+  commit="$(cfg "servers.$server.commit" 2>/dev/null | cut -c1-12 || true)"; commit="${commit:-nocommit}"
   skey="snapshots/${server}-${SIZE}-${commit}.dump"
   dkey="datasets/${SIZE}.tar.gz"
 
