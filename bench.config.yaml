@@ -149,10 +149,10 @@ run:
 # CONCURRENCY_LEVELS="1 8 32" (closed) or RATE_LEVELS="50 200" (open).
 workload:
   read-mix:                # read-dominated real-world traffic; read-only (state shared across the sweep)
-    concurrency_levels: [1, 8, 32, 64, 128, 256]        # closed: concurrent clients (VUs)
+    concurrency_levels: [10, 50, 100, 200, 500, 1000]   # closed: concurrent clients (VUs) — low anchor (10) for our knee + 100–1000 to match published HAPI numbers
     rate_levels: [50, 100, 200, 400]                    # open: req/s offered
   ingest:                  # transaction-bundle writes (PR #165); snapshot restored before each level
-    concurrency_levels: [1, 4, 8, 16, 32]               # closed: writes are heavier → lower ceiling
+    concurrency_levels: [5, 10, 20, 50]                 # closed: writes saturate low (~DB pool of 20); dense through the knee, one plateau point
     rate_levels: [10, 25, 50, 100]                       # open: bundles/s offered
 
 # SLO line for the headline "max sustainable throughput" — the highest offered rate
