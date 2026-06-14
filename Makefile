@@ -55,15 +55,8 @@ stop: ## Stop the in-flight detached run (controller + workers, verified); STACK
 report: ## Show the latest run's report + run log from Blob (works after auto-stop; pass a run-… prefix to pick one)
 	@bin/fetch-report.sh $(RUN)
 
-report-parallel: ## Pull both parallel stacks' results from their loadgens and build ONE head-to-head report
-	@set -e; mkdir -p results; \
-	for s in 1 2; do \
-	  set -a; . ./.detached.s$$s.env 2>/dev/null; set +a; \
-	  if [ -z "$${LOADGEN_IP:-}" ]; then echo "WARN: .detached.s$$s.env missing — stack $$s not launched?"; continue; fi; \
-	  echo "==> pulling stack $$s results from $$LOADGEN_IP"; \
-	  scp $$SSH_OPTS -q -r "$$ADMIN@$$LOADGEN_IP:$$REPO/results/." results/ 2>/dev/null || echo "WARN: could not pull stack $$s results (VM up? SSH IP?)"; \
-	done; \
-	python3 reporting/report.py
+report-parallel: ## Build ONE head-to-head report from both parallel stacks' results in Blob (works even after auto-stop)
+	@reporting/fetch-parallel.sh $(RUN)
 
 clean-blob: ## Delete ALL run results from the Blob container (start fresh)
 	@ACCT=$$(cd $(INFRA) && terraform output -raw storage_account); \
