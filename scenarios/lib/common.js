@@ -55,21 +55,32 @@ export function record(res, op, expectStatus) {
   }
 }
 
-// ---- executor -------------------------------------------------------------
-// Open model: k6 issues RATE iterations/sec on a clock, independent of how fast the
-// server responds. The OFFERED RATE is the input we set exactly; the server either
-// keeps up (achieved throughput ≈ offered, latency flat) or falls behind (latency
-// climbs, backlog grows). We sweep RATE across a ladder (one level per run) — see
-// docs/load-model.md. This avoids coordinated omission: a slow response can't
-// throttle the offered load, so the tail latency stays honest.
+// ---- executors ------------------------------------------------------------
+// Two load models, selected by LOAD_MODEL (default: closed). Both sweep a ladder of
+// levels (one level per run); the orchestrator steps the ladder. See docs/load-model.md.
 //
-// VU sizing: the executor needs a free VU to hold each in-flight request. Required
-// VUs ≈ RATE × latency_seconds. preAllocatedVUs covers up to ~the SLO (so under-SLO
-// operation never waits on mid-test allocation); maxVUs gives headroom to ~3 s of
-// latency. If even that is exhausted (server deep in overload), k6 emits
-// dropped_iterations — report.py flags those levels as "offered rate not delivered"
-// rather than mistaking the load generator's ceiling for the server's. run.sh
-// computes PREALLOCATED_VUS/MAX_VUS from the rate; these are just the defaults.
+// CLOSED (default) — VUS concurrent clients, each looping send -> await reply -> send
+// next (no think-time). Concurrency is the INPUT; throughput is the measured output.
+// This is the field-standard "N concurrent users" shape and is directly comparable to
+// published FHIR-server benchmarks. No VU pool to exhaust -> no dropped-iteration
+// artifact. (Tail latency reads optimistically past saturation — coordinated omission
+// — so report throughput as the headline and treat near-cliff p99 as indicative.)
+export function constantVus(name) {
+  return {
+    [name]: {
+      executor: 'constant-vus',
+      vus: num(__ENV.VUS, 1),
+      duration: __ENV.DURATION || '60s',
+      exec: 'default',
+    },
+  };
+}
+
+// OPEN — k6 issues RATE iterations/sec on a clock, independent of server speed. The
+// offered RATE is the input; a slow server piles up a backlog rather than throttling
+// the load, so tail latency stays honest (no coordinated omission). run.sh sizes the
+// VU pool from the rate; if it's exhausted (deep overload) k6 emits dropped_iterations,
+// which report.py flags so the load generator's ceiling isn't mistaken for the server's.
 export function constantArrival(name) {
   return {
     [name]: {
@@ -84,14 +95,21 @@ export function constantArrival(name) {
   };
 }
 
+// Pick the executor for the configured model (closed unless LOAD_MODEL=open).
+export function executor(name) {
+  return __ENV.LOAD_MODEL === 'open' ? constantArrival(name) : constantVus(name);
+}
+
+const OPEN = __ENV.LOAD_MODEL === 'open';
+
 // Percentiles to compute in the end-of-test summary. k6's default is only
 // p(90)/p(95); the methodology calls for p50–p99.9, so request them explicitly.
 export const SUMMARY_TREND_STATS = ['avg', 'min', 'med', 'p(50)', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)', 'max'];
 
 // ---- thresholds -----------------------------------------------------------
-// Pure pass/fail signal for the SLO line — never aborts. Each concurrency level
-// runs to completion; report.py finds the knee (peak throughput) and the highest
-// level still under the p99 SLO from the measured numbers across the sweep.
+// Pure pass/fail signal for the SLO line — never aborts. Each level runs to
+// completion; report.py finds the knee and the highest level still under the p99 SLO
+// from the measured numbers across the sweep.
 export function thresholds() {
   return {
     http_req_duration: [`p(99)<${P99_MS}`],
@@ -148,9 +166,10 @@ export function summary(scenarioName) {
     const failed = m.http_req_failed && m.http_req_failed.values ? m.http_req_failed.values : {};
     const dropped = m.dropped_iterations && m.dropped_iterations.values ? (m.dropped_iterations.values.count || 0) : 0;
     const p50 = dur['p(50)'] !== undefined ? dur['p(50)'] : (dur.med || 0);
+    const level = OPEN ? `offered=${__ENV.RATE || '?'}/s` : `vus=${__ENV.VUS || '?'}`;
     out.stdout =
       `\n${scenarioName}: ` +
-      `offered=${__ENV.RATE || '?'}/s ` +
+      `${level} ` +
       `achieved=${((m.http_reqs && m.http_reqs.values.rate) || 0).toFixed(1)}/s ` +
       `p50=${p50.toFixed(1)}ms ` +
       `p99=${(dur['p(99)'] || 0).toFixed(1)}ms ` +
