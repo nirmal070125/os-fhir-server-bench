@@ -141,12 +141,16 @@ stop_server() {
 # no connections to it during the swap: reset_state stops the app first, then starts it
 # after — which also gives pooled/cached servers (HAPI, Medplum, IBM) fresh connections
 # + metadata against the restored data. The warm-up that follows absorbs the cold start.
-stop_app() {  # <server> — stop just the app container (db keeps running)
-  sut_run "cd servers/$1 && { [ -f .env ] && docker compose --env-file .env stop server || docker compose stop server; }"
-}
-start_app() { # <server>
-  sut_run "cd servers/$1 && { [ -f .env ] && docker compose --env-file .env start server || docker compose start server; }"
-}
+# Stop/start just the app container by NAME, not via `docker compose`. `docker compose
+# stop/start` re-parses the compose file and must interpolate ${SUT_CPUS}/${HOST_PORT}/…
+# — which come from each server's own up.sh env prep (render-env .env for fhir-server-go,
+# exported vars for HAPI). Those aren't present here, so the compose path fails to decode
+# (HAPI has no .env at all). `docker stop/start <container>` needs none of that and keeps
+# the container's create-time CPU/mem limits. Name = bench-<server>-server-1 (compose
+# project "bench-<server>", service "server").
+stop_app() {  sut_run "docker stop bench-$1-server-1"  >/dev/null; }   # <server>
+start_app() { sut_run "docker start bench-$1-server-1" >/dev/null; }   # <server>
+
 
 # Wait (on the SUT) for the server to be ready — needed after a rocksdb restart;
 # a no-op once the server is already up.
