@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 INFRA := infra
 
-.PHONY: help check provision teardown clean clean-blob smoke benchmark benchmark-parallel status stop report report-parallel seed run
+.PHONY: help check provision teardown clean clean-blob smoke smoke-parallel benchmark benchmark-parallel status stop report report-parallel seed run
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -16,6 +16,12 @@ smoke: provision ## Quick validation run (small data, 1 rep, short windows, trun
 	@SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 \
 	   CONCURRENCY_LEVELS="1 8 32" \
 	   orchestrator/run-detached.sh
+
+smoke-parallel: provision ## Quick PARALLEL validation: both stacks, small data, short windows (needs azure.parallel_stacks=true)
+	@echo "==> smoke-parallel: small / 1 rep / 15s+30s / 2 stacks (z1+z2) — both load models truncated"
+	@SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 \
+	   RATE_LEVELS="50 200" CONCURRENCY_LEVELS="1 8" \
+	   orchestrator/run-parallel.sh
 
 benchmark: provision ## The full run (bench.config.yaml: size, reps, windows, full ramp) — detached
 	@orchestrator/run-detached.sh
