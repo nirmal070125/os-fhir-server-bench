@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 INFRA := infra
 
-.PHONY: help check provision teardown clean clean-blob smoke benchmark status stop report seed run
+.PHONY: help check provision teardown clean clean-blob smoke smoke-parallel benchmark benchmark-parallel status stop report report-parallel seed run
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -17,16 +17,25 @@ smoke: provision ## Quick validation run (small data, 1 rep, short windows, trun
 	   CONCURRENCY_LEVELS="1 8 32" \
 	   orchestrator/run-detached.sh
 
+smoke-parallel: provision ## Quick PARALLEL validation: both stacks, small data, short windows (needs azure.parallel_stacks=true)
+	@echo "==> smoke-parallel: small / 1 rep / 15s+30s / 2 stacks (z1+z2) — both load models truncated"
+	@SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 \
+	   RATE_LEVELS="50 200" CONCURRENCY_LEVELS="1 8" \
+	   orchestrator/run-parallel.sh
+
 benchmark: provision ## The full run (bench.config.yaml: size, reps, windows, full ramp) — detached
 	@orchestrator/run-detached.sh
 
-status: ## Show the in-flight run's progress (log tail / DONE)
-	@set -a; . ./.detached.env 2>/dev/null; set +a; \
+benchmark-parallel: provision ## Two servers concurrently on separate AZs (needs azure.parallel_stacks=true) — detached
+	@orchestrator/run-parallel.sh
+
+status: ## Show the in-flight run's progress (log tail / DONE). STACK=2 for the parallel 2nd stack.
+	@set -a; . ./.detached$(if $(STACK),.s$(STACK)).env 2>/dev/null; set +a; \
 	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit \$$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
 	  || echo "no detached run found (.detached.env missing — run 'make smoke' or 'make benchmark')"
 
-stop: ## Stop the in-flight detached run (controller + workers, verified); DEALLOCATE=1 also halts VM billing
-	@set -a; . ./.detached.env 2>/dev/null; set +a; \
+stop: ## Stop the in-flight detached run (controller + workers, verified); STACK=2 for the 2nd stack; DEALLOCATE=1 also halts VM billing
+	@set -a; . ./.detached$(if $(STACK),.s$(STACK)).env 2>/dev/null; set +a; \
 	  if [ -z "$${LOADGEN_IP:-}" ]; then echo "no detached run found (.detached.env missing)"; \
 	  else \
 	    echo "==> stopping run on loadgen $$LOADGEN_IP (kill controller + workers, verify)"; \
@@ -45,6 +54,16 @@ stop: ## Stop the in-flight detached run (controller + workers, verified); DEALL
 
 report: ## Show the latest run's report + run log from Blob (works after auto-stop; pass a run-… prefix to pick one)
 	@bin/fetch-report.sh $(RUN)
+
+report-parallel: ## Pull both parallel stacks' results from their loadgens and build ONE head-to-head report
+	@set -e; mkdir -p results; \
+	for s in 1 2; do \
+	  set -a; . ./.detached.s$$s.env 2>/dev/null; set +a; \
+	  if [ -z "$${LOADGEN_IP:-}" ]; then echo "WARN: .detached.s$$s.env missing — stack $$s not launched?"; continue; fi; \
+	  echo "==> pulling stack $$s results from $$LOADGEN_IP"; \
+	  scp $$SSH_OPTS -q -r "$$ADMIN@$$LOADGEN_IP:$$REPO/results/." results/ 2>/dev/null || echo "WARN: could not pull stack $$s results (VM up? SSH IP?)"; \
+	done; \
+	python3 reporting/report.py
 
 clean-blob: ## Delete ALL run results from the Blob container (start fresh)
 	@ACCT=$$(cd $(INFRA) && terraform output -raw storage_account); \

@@ -29,6 +29,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
   location              = azurerm_resource_group.rg.location
   resource_group_name   = azurerm_resource_group.rg.name
   size                  = each.value.size
+  zone                  = each.value.zone # null = regional (single-stack); "1"/"2" pins the parallel stacks apart
   admin_username        = local.cfg.azure.admin_username
   network_interface_ids = [azurerm_network_interface.nic[each.key].id]
   tags                  = local.tags
