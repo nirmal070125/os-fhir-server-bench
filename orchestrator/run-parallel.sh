@@ -13,14 +13,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 
-# Safety: in parallel mode auto-stop is a footgun — the first stack to finish would
-# deallocate ALL VMs (its self-stop targets the whole RG), killing the other stack
-# mid-run. Refuse unless it's off; stop/deallocate manually after both finish.
-if [[ "$(bin/cfg azure.auto_stop_when_done 2>/dev/null)" == "true" ]]; then
-  echo "ERROR: set azure.auto_stop_when_done=false for parallel runs (else the first" >&2
-  echo "       stack to finish deallocates the other mid-run). Stop manually after both." >&2
-  exit 1
-fi
+# Auto-stop (azure.auto_stop_when_done) is parallel-SAFE: each stack's self-stop
+# deallocates only its OWN SUT+loadgen, never the other stack's — so a finishing stack
+# can't kill the sibling mid-run. The shared obs is deallocated only by the LAST stack
+# to finish (so the still-running stack keeps monitoring). See self-stop.sh.
+# Manual `make stop DEALLOCATE=1` still works as a backstop.
 
 S1="${SERVERS_1:-fhir-server-go}"   # stack 1 (zone 1)
 S2="${SERVERS_2:-hapi}"             # stack 2 (zone 2)

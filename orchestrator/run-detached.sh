@@ -126,8 +126,19 @@ fi
 # identity (config azure.auto_stop_when_done + the Owner-only role assignment).
 stop_line=":"
 if [[ "$(cfg azure.auto_stop_when_done 2>/dev/null)" == "true" ]]; then
-  stop_line="BENCH_SUB='$(az account show --query id -o tsv 2>/dev/null)' BENCH_RG='$(cfg azure.resource_group)' orchestrator/self-stop.sh"
-  echo "==> auto-stop ON: VMs will deallocate after the report uploads"
+  stop_vms_env=""
+  if [[ "$(cfg azure.parallel_stacks 2>/dev/null)" == "true" ]]; then
+    # Parallel: this stack deallocates ONLY its own SUT+loadgen — never the other
+    # stack's VMs. The shared monitoring-only obs is deallocated by self-stop ONLY when
+    # this is the last stack to finish (all PEER VMs already down), so the still-running
+    # stack keeps its monitoring. VM names match infra name_prefix "fhirbench".
+    if [[ "$STACK" == "2" ]]; then peer_sut="sut"; peer_loadgen="loadgen"; else peer_sut="sut2"; peer_loadgen="loadgen2"; fi
+    stop_vms_env="BENCH_STOP_VMS='fhirbench-$SUT_KEY fhirbench-$LOADGEN_KEY' BENCH_SHARED_VMS='fhirbench-obs' BENCH_PEER_VMS='fhirbench-$peer_sut fhirbench-$peer_loadgen' "
+    echo "==> auto-stop ON (parallel): this stack frees its own VMs (sut=$SUT_KEY, loadgen=$LOADGEN_KEY); obs only when the other stack is also done"
+  else
+    echo "==> auto-stop ON: all VMs will deallocate after the report uploads"
+  fi
+  stop_line="${stop_vms_env}BENCH_SUB='$(az account show --query id -o tsv 2>/dev/null)' BENCH_RG='$(cfg azure.resource_group)' orchestrator/self-stop.sh"
 fi
 # Optional webhook notification when the run finishes (BENCH_NOTIFY_URL in .env).
 notify_line=":"
