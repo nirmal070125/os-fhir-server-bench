@@ -1,16 +1,17 @@
-// read-mix — read-dominated real-world traffic at a fixed OFFERED RATE (open model,
-// constant-arrival-rate). A realistic clinical read mix against EXISTING seeded data:
-// instance reads, patient searches, and patient-scoped clinical queries. No writes
-// (state stays identical across the whole rate sweep so the comparison is fair).
-// One rate level per run; the orchestrator sweeps the ladder.
+// read-mix — read-dominated real-world traffic. A realistic clinical read mix against
+// EXISTING seeded data: instance reads, patient searches, and patient-scoped clinical
+// queries. No writes (state stays identical across the whole sweep so the comparison
+// is fair). One level per run; the orchestrator sweeps the ladder. The load model
+// (closed VUs by default, or open arrival-rate via LOAD_MODEL=open) is chosen by
+// executor() — see docs/load-model.md.
 import http from 'k6/http';
 import {
-  BASE, JSON_HEADERS, constantArrival, thresholds, record,
+  BASE, JSON_HEADERS, executor, thresholds, record,
   collectIds, randItem, summary, SUMMARY_TREND_STATS,
 } from './lib/common.js';
 
 export const options = {
-  scenarios: constantArrival('read_mix'),
+  scenarios: executor('read_mix'),
   thresholds: thresholds(),
   summaryTrendStats: SUMMARY_TREND_STATS,
 };

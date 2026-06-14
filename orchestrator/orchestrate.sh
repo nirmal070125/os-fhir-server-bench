@@ -43,6 +43,9 @@ REPS="${REPS:-$(cfg run.repetitions)}"
 WARMUP_S="${WARMUP_S:-$(cfg run.warmup_s)}"
 MEASURE_S="${MEASURE_S:-$(cfg run.measure_s)}"
 COOLDOWN_S="${COOLDOWN_S:-$(cfg run.cooldown_s)}"
+# Load model: closed (default, concurrency sweep) | open (offered-rate sweep). Passed
+# to run.sh/k6 so every leg uses the same model. See docs/load-model.md.
+MODEL="${LOAD_MODEL:-$(cfg run.load_model 2>/dev/null || echo closed)}"; export LOAD_MODEL="$MODEL"
 SNAP_DIR="dataset/snapshots"   # repo-relative; resolves on whichever host runs it
 
 # --- execution routing -----------------------------------------------------
@@ -76,10 +79,21 @@ snapshot_path() { echo "$SNAP_DIR/$1-$SIZE.dump"; }
 
 # Offered-rate ladder (req/s) for a scenario (space-separated). RATE_LEVELS env (e.g.
 # "50 200") overrides the config ladder for ALL scenarios — used by smoke/iteration.
-rate_levels() { # <scenario>
-  if [[ -n "${RATE_LEVELS:-}" ]]; then echo "$RATE_LEVELS"; return; fi
-  yq -r ".workload.\"$1\".rate_levels | join(\" \")" "$ROOT/bench.config.yaml"
+# Load ladder for a scenario (space-separated), per the active model. Env override:
+# CONCURRENCY_LEVELS (closed) / RATE_LEVELS (open) — applies to all scenarios.
+levels_for() { # <scenario>
+  if [[ "$MODEL" == "open" ]]; then
+    [[ -n "${RATE_LEVELS:-}" ]] && { echo "$RATE_LEVELS"; return; }
+    yq -r ".workload.\"$1\".rate_levels | join(\" \")" "$ROOT/bench.config.yaml"
+  else
+    [[ -n "${CONCURRENCY_LEVELS:-}" ]] && { echo "$CONCURRENCY_LEVELS"; return; }
+    yq -r ".workload.\"$1\".concurrency_levels | join(\" \")" "$ROOT/bench.config.yaml"
+  fi
 }
+# The env var run.sh expects for a level, and the results subdir prefix, per model.
+lvl_env()    { [[ "$MODEL" == "open" ]] && echo "RATE=$1" || echo "CONCURRENCY=$1"; }
+lvl_prefix() { [[ "$MODEL" == "open" ]] && echo "rate-$1" || echo "c-$1"; }
+lvl_label()  { [[ "$MODEL" == "open" ]] && echo "$1/s offered" || echo "$1 VUs"; }
 
 # SUT-side URLs are always localhost (these steps run ON the SUT).
 sut_local_base() { echo "http://localhost:$(cfg "servers.$1.port")$(cfg "servers.$1.base_path")"; }
@@ -216,12 +230,12 @@ reset_state() { # <server>
 # Measure ONE offered-rate level (capture) -> pull results -> cooldown. k6 exit 99
 # (SLO not met at this rate, expected at the high end) is tolerated by run.sh; a real
 # failure here is operational and aborts the rep.
-measure_level() { # <server> <scenario> <rep> <rate> <target>
-  local server="$1" scenario="$2" rep="$3" rate="$4" target="$5" outdir
-  outdir="results/$server/$scenario/rep-$rep/rate-$rate"
-  log "    rate=$rate/s: measure ${MEASURE_S}s (capture)"
-  if ! loadgen_run "RATE=$rate CAPTURE=1 OUTDIR='$outdir' scenarios/run.sh '$scenario' '$target' '${MEASURE_S}s'"; then
-    echo "ERROR: $scenario @ rate=$rate failed" >&2; return 1
+measure_level() { # <server> <scenario> <rep> <level> <target>
+  local server="$1" scenario="$2" rep="$3" lvl="$4" target="$5" outdir
+  outdir="results/$server/$scenario/rep-$rep/$(lvl_prefix "$lvl")"
+  log "    $(lvl_label "$lvl"): measure ${MEASURE_S}s (capture)"
+  if ! loadgen_run "$(lvl_env "$lvl") CAPTURE=1 OUTDIR='$outdir' scenarios/run.sh '$scenario' '$target' '${MEASURE_S}s'"; then
+    echo "ERROR: $scenario @ $(lvl_label "$lvl") failed" >&2; return 1
   fi
   # Pull ONLY the small summary.json to the operator (that's all report.py needs).
   # The raw per-point metrics.json can be large (high rate) and stays on the loadgen
@@ -236,28 +250,29 @@ measure_level() { # <server> <scenario> <rep> <rate> <target>
 # baseline) + warm before EVERY level. Warm-up (discarded) at a level's own offered
 # rate warms JIT/cache/pools; reads warm at the top of the ladder (max stress).
 run_sweep() {
-  local server="$1" scenario="$2" rep="$3" target levels rate
+  local server="$1" scenario="$2" rep="$3" target levels lvl top
   target="$(k6_target_base "$server")"
-  read -r -a levels <<< "$(rate_levels "$scenario")"
+  read -r -a levels <<< "$(levels_for "$scenario")"
+  top="${levels[$(( ${#levels[@]} - 1 ))]}"   # warm at the top of the ladder (max stress)
   if [[ "$scenario" == "ingest" ]]; then
-    for rate in "${levels[@]}"; do
-      log "  rep $rep rate=$rate/s: restore -> warm-up ${WARMUP_S}s (discard) -> measure ${MEASURE_S}s"
+    for lvl in "${levels[@]}"; do
+      log "  rep $rep $(lvl_label "$lvl"): restore -> warm-up ${WARMUP_S}s (discard) -> measure ${MEASURE_S}s"
       reset_state "$server"
-      loadgen_run "RATE=$rate CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'" || true
-      measure_level "$server" "$scenario" "$rep" "$rate" "$target" || return 1
+      loadgen_run "$(lvl_env "$lvl") CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'" || true
+      measure_level "$server" "$scenario" "$rep" "$lvl" "$target" || return 1
     done
   else
     # read-only: state can't change across reps, so restore + warm-up ONCE (on rep 1)
     # and reuse the warmed baseline for every rep — no point paying a reset per rep.
     if [[ "$rep" == "1" ]]; then
-      log "  rep $rep: restore -> warm-up ${WARMUP_S}s (discard) -> sweep offered rate [${levels[*]}]/s"
+      log "  rep $rep: restore -> warm-up ${WARMUP_S}s (discard) -> sweep [${levels[*]}]"
       reset_state "$server"
-      loadgen_run "RATE=${levels[$(( ${#levels[@]} - 1 ))]} CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'" || true
+      loadgen_run "$(lvl_env "$top") CAPTURE=0 scenarios/run.sh '$scenario' '$target' '${WARMUP_S}s'" || true
     else
-      log "  rep $rep: reuse warmed read-only baseline -> sweep offered rate [${levels[*]}]/s"
+      log "  rep $rep: reuse warmed read-only baseline -> sweep [${levels[*]}]"
     fi
-    for rate in "${levels[@]}"; do
-      measure_level "$server" "$scenario" "$rep" "$rate" "$target" || return 1
+    for lvl in "${levels[@]}"; do
+      measure_level "$server" "$scenario" "$rep" "$lvl" "$target" || return 1
     done
   fi
 }
@@ -272,14 +287,14 @@ write_manifest() {
   nproc="$(sut_run 'getconf _NPROCESSORS_ONLN 2>/dev/null' 2>/dev/null || echo '?')"
   # Effective p99 SLO per scenario (per_scenario override, else default) — so the
   # report is self-contained and can mark each scenario against its own bar.
-  local slo_map="" rate_map="" s p lv
+  local slo_map="" lvl_map="" s p lv
   for s in "${SCENARIOS[@]}"; do
     p="$(cfg "slo.per_scenario.\"$s\".p99_ms" 2>/dev/null || cfg slo.p99_ms)"
     slo_map+="\"$s\": $p, "
-    lv="$(rate_levels "$s")"
-    rate_map+="\"$s\": [$(echo "$lv" | tr ' ' ',')], "
+    lv="$(levels_for "$s")"
+    lvl_map+="\"$s\": [$(echo "$lv" | tr ' ' ',')], "
   done
-  slo_map="${slo_map%, }"; rate_map="${rate_map%, }"
+  slo_map="${slo_map%, }"; lvl_map="${lvl_map%, }"
   # Seed outcome (bundles loaded vs failed) — written by seed.sh on the loadgen; fold it
   # into the dataset object so the report records exactly how complete the dataset is.
   local seed_json seed_fields=""
@@ -300,8 +315,8 @@ write_manifest() {
     echo "  \"dataset\": { \"size\": \"$SIZE\", \"hash\": \"$hash\"${seed_fields} },"
     echo "  \"slo\": { \"p99_ms\": $(cfg slo.p99_ms), \"max_error_rate\": $(cfg slo.max_error_rate), \"p99_ms_by_scenario\": { $slo_map } },"
     echo "  \"run\": { \"repetitions\": $REPS, \"warmup_s\": $WARMUP_S, \"measure_s\": $MEASURE_S, \"cooldown_s\": $COOLDOWN_S },"
-    echo "  \"load_model\": \"open (constant-arrival-rate sweep)\","
-    echo "  \"rate_levels\": { $rate_map },"
+    echo "  \"load_model\": \"$MODEL\","
+    echo "  \"levels\": { $lvl_map },"
     echo "  \"scenarios\": [$(printf '"%s",' "${SCENARIOS[@]}" | sed 's/,$//')]"
     echo '}'
   } > "$out"
@@ -313,7 +328,7 @@ phase_run() {
   sut_run "[ -f '$snap' ]" 2>/dev/null || { echo "ERROR: no snapshot for $server ($snap) — run the seed phase first" >&2; exit 1; }
   start_server "$server"
   for scenario in "${SCENARIOS[@]}"; do
-    log "$server / $scenario — $REPS rep(s) × offered rate [$(rate_levels "$scenario")]/s"
+    log "$server / $scenario — $REPS rep(s) × [$MODEL] [$(levels_for "$scenario")]"
     for rep in $(seq 1 "$REPS"); do run_sweep "$server" "$scenario" "$rep"; done
   done
   write_manifest "$server"
@@ -321,7 +336,7 @@ phase_run() {
 }
 
 # --- main ------------------------------------------------------------------
-log "command=$CMD  mode=$([ "$REMOTE" = 1 ] && echo remote || echo local)  servers=[${SERVERS[*]}]  scenarios=[${SCENARIOS[*]}]  size=$SIZE  reps=$REPS"
+log "command=$CMD  mode=$([ "$REMOTE" = 1 ] && echo remote || echo local)  model=$MODEL  servers=[${SERVERS[*]}]  scenarios=[${SCENARIOS[*]}]  size=$SIZE  reps=$REPS"
 for server in "${SERVERS[@]}"; do
   case "$CMD" in
     seed) phase_seed "$server"; stop_server "$server" ;;

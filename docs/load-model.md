@@ -1,142 +1,137 @@
-# Load model — open-model offered-rate sweep
+# Load model — closed (default) or open
 
 > How this benchmark drives load, what it measures, and why. Read alongside
 > `docs/proposal.md` (the fairness charter) and `scenarios/README.md` (the scripts).
 
 ## TL;DR
 
-Every workload is driven as an **open model**: k6 issues requests at a fixed
-**offered rate** (req/s) on a clock, independent of how fast the server responds
-(`constant-arrival-rate`). We **sweep the offered rate** across a ladder
-(`50, 100, 200, …`) and measure each level to steady state. The independent variable
-is **offered rate**; the headline output is **max sustainable throughput** — the
-highest offered rate the server keeps up with while staying under the latency SLO,
-reported per server and per vCPU.
+The harness supports **two load models**, selected by `run.load_model` in
+`bench.config.yaml` (or the `LOAD_MODEL` env override). Both **sweep a ladder of
+levels** (one level per measured window) and report per server, per vCPU.
 
-## Why open model
+| | **closed** (default) | **open** |
+|---|---|---|
+| You set | **concurrency** — N clients (VUs), each send→await→send | **offered rate** — req/s on a clock |
+| What emerges | throughput | backlog / latency |
+| k6 executor | `constant-vus` | `constant-arrival-rate` |
+| Ladder | `workload.*.concurrency_levels` | `workload.*.rate_levels` |
+| Headline | peak throughput + max throughput @ p99<SLO | max sustainable throughput @ p99<SLO |
+| Tail latency | optimistic past saturation (coordinated omission) | honest (CO-free) |
 
-- **Honest tail latency (no coordinated omission).** Because requests arrive on a
-  clock, a slow response cannot throttle the offered load — when the server stalls,
-  the requests that pile up all record the full delay. A closed model (fixed VUs,
-  each waiting for its reply before sending again) under-samples a server's slow
-  moments and reports an optimistic tail. Since our headline is *tail latency at an
-  SLO*, the open model is the fair tool. (This is what `docs/proposal.md` §5 argued.)
-- **The metric we actually want.** "Max sustainable throughput @ p99 < 500 ms" is, by
-  definition, a statement about *offered rate* — exactly the quantity this model sets.
-- **Defensible.** Coordinated omission is the first thing a knowledgeable reviewer
-  checks; the open model removes that line of attack.
+**Closed is the default** because it's the field-standard "N concurrent users" shape —
+directly comparable to published FHIR-server benchmarks (HAPI, Blaze, fhir-benchmarks.com)
+and intuitive for capacity planning. **Open** is available for coordinated-omission-free
+tail latency when that's the priority.
 
-## Offered rate vs achieved throughput
+## Choosing a model
 
-At a fixed offered rate `R`, the measured (achieved) throughput is:
+- **closed** (default): you want results **comparable to the rest of the field**, the
+  intuitive "throughput & latency at N concurrent clients" story, and throughput as a
+  directly-measured (CO-immune) headline. Caveat: closed-model latency percentiles read
+  **optimistically once a server is past its knee** (coordinated omission) — so we
+  headline *throughput* and treat near-cliff tails as indicative.
+- **open**: you want **coordinated-omission-free tail latency** as the headline — a
+  slow server piles up a backlog instead of throttling the offered load, so its slow
+  moments aren't under-sampled. Costs some operational complexity (VU-pool sizing +
+  dropped-iteration handling, below).
 
-```
-achieved = min(offered R, server_capacity)
-```
+Both are **internally fair**: every server runs through the same harness with the same
+model, so the server-vs-server comparison is self-consistent either way. The choice only
+affects CO-honesty of tails and comparability with externally-published numbers.
 
-- Below the server's capacity, `achieved ≈ R` and latency stays flat — the server is
-  keeping up. (So a single rate doesn't reveal the maximum; every capable server just
-  returns the offered rate. The maximum only emerges from the *sweep*.)
-- Above capacity, `achieved` plateaus at the server's real limit, the backlog grows,
-  latency climbs, and eventually the load generator runs out of VUs to hold in-flight
-  requests → **dropped iterations**.
+## What each model measures
 
-**Max sustainable throughput** = the highest offered rate where the server still
-delivered the rate (achieved ≈ offered, no dropped iterations) **and** p99 < SLO and
-errors < max. That is the knee, read straight off the latency-vs-rate curve.
+**closed** — `throughput = concurrency / latency` (Little's Law). Throughput rises with
+concurrency, then plateaus at the knee; latency climbs past it. Headline: **peak
+throughput** (capacity) and **max throughput while p99 < SLO**.
 
-## The one thing the open model needs: VU headroom + a dropped-iterations guard
+**open** — `achieved = min(offered_rate, server_capacity)`. Below capacity `achieved ≈
+offered` and latency is flat; above it the backlog grows, latency climbs, and the load
+generator eventually can't issue the scheduled requests → **dropped iterations**.
+Headline: **max sustainable throughput** = highest offered rate delivered (achieved ≈
+offered, no drops) with p99 < SLO.
 
-The executor needs a free VU to hold each in-flight request — required VUs ≈
-`offered_rate × latency_seconds` (Little's Law). If the pool is too small, k6 can't
-issue the scheduled requests and the *actual* offered rate silently drops below
-target — which would mislabel the **load generator's** ceiling as the **server's**.
+## Open model only: VU headroom + dropped-iterations guard
 
-We handle this explicitly:
+The arrival-rate executor needs a free VU per in-flight request (≈ `rate × latency`,
+Little's Law). If the pool is too small, k6 can't issue the scheduled requests and the
+*actual* offered rate silently drops — mislabeling the **load generator's** ceiling as
+the **server's**. So `run.sh` sizes the pool from the rate (`preAllocatedVUs ≈ rate/2`,
+`maxVUs ≈ rate×3`), and `report.py` **excludes any level with `dropped_iterations > 0`**
+from max-sustainable (a visible `Dropped` column flags it). The closed model has no such
+issue — concurrency is fixed, so there's nothing to drop.
 
-- `run.sh` sizes the pool from the rate: `preAllocatedVUs ≈ rate/2` (covers up to ~the
-  p99 SLO, so under-SLO operation never waits on mid-test allocation) and
-  `maxVUs ≈ rate×3` (headroom to ~3 s of latency).
-- k6's **`dropped_iterations`** counter is captured per level. `report.py` treats any
-  level with `dropped > 0` as "offered rate not delivered" (server saturated) and
-  **excludes it from max-sustainable**. A non-zero `Dropped` column in the report is
-  the visible flag. This is the fix for the silent VU-starvation failure mode.
-
-## Workloads
+## Workloads (same for both models)
 
 | Workload | Ops | State |
 |---|---|---|
 | `read-mix` | weighted read blend: instance read (45%), patient search (20%), obs-for-patient (20%), cond-for-patient (10%), history (5%) | read-only — DB state identical across the whole sweep |
-| `ingest` | POST `Patient + Encounter + 2×Observation` **transaction bundle** (the PR #165 system endpoint) | writes — DB state reset before **every** rate level |
+| `ingest` | POST `Patient + Encounter + 2×Observation` **transaction bundle** (the PR #165 system endpoint) | writes — DB state reset before **every** level |
 
-There is no separate `saturation` scenario: the rate sweep *is* the saturation curve.
-Latency stays flat while the server keeps up, then climbs at the knee — no fragile
-ramp-abort / run-duration reverse-engineering.
+There's no separate `saturation` scenario: the sweep *is* the saturation curve.
 
 ## Per-level protocol
 
-For each `(server, workload, offered rate R)`, repeated `repetitions` times:
+For each `(server, workload, level)`, repeated `repetitions` times:
 
 ```
-read-mix (read-only):                ingest (writes):
-  restore snapshot   ── once/rep       for each R:
-  warm-up (discard)  ── once/rep         restore snapshot   (clean state)
-  for each R:                            warm-up (discard)
-    measure R  (constant-arrival)        measure R  (constant-arrival)
+read-mix (read-only):              ingest (writes):
+  restore snapshot   ── once/rep     for each level:
+  warm-up (discard)  ── once/rep       restore snapshot   (clean state)
+  for each level:                      warm-up (discard)
+    measure (capture)                  measure (capture)
 ```
 
-- **Reads** reuse one restored, warmed snapshot across the whole ladder (reads don't
-  mutate state). Warm-up runs at the top of the ladder (max stress).
-- **Writes** restore before each level so accumulated writes never bias the next;
-  every level starts from the identical frozen snapshot (charter §6).
-- **Warm-up** (`run.warmup_s`, discarded) warms JIT / page cache / DB buffers / pools.
-  **Measure** (`run.measure_s`) at constant offered rate is the only captured data.
-  Then cool-down. **Repeat ≥ `run.repetitions`**; the report headlines the median.
-
-## Metrics
-
-**Primary:**
-- **Max sustainable throughput** (req/s) — highest offered rate meeting the SLO with
-  the rate delivered — and **per vCPU** (÷ `limits.sut_cpus`), the fairness headline.
-- **Latency-vs-rate curve**: achieved throughput, p50 / p95 / p99 / p99.9, error rate,
-  and dropped iterations at each offered rate. Tails are coordinated-omission-free.
+- **Reads** reuse one restored, warmed snapshot across the whole ladder (reads can't
+  mutate state); warm-up runs at the top of the ladder.
+- **Writes** restore before each level so accumulated writes never bias the next
+  (charter §6) — via the fast template-clone restore (`dataset/restore_postgres.sh`).
+- **Warm-up** (`run.warmup_s`, discarded) warms JIT / page cache / DB buffers / pools;
+  **measure** (`run.measure_s`) is the only captured data; then cool-down. Repeat ≥
+  `run.repetitions`; the report headlines the median.
 
 ## Configuration
 
 ```yaml
 run:
-  scenarios: [read-mix, ingest]    # open-model offered-rate sweeps
+  load_model: closed               # closed (default) | open
+  scenarios: [read-mix, ingest]
 workload:
   read-mix:
-    rate_levels: [50, 100, 200, 400, 800, 1600, 3200]   # req/s offered
+    concurrency_levels: [1, 8, 32, 64, 128, 256]   # closed: # of clients
+    rate_levels: [50, 100, 200, 400]               # open: req/s offered
   ingest:
-    rate_levels: [10, 25, 50, 100, 200]                 # bundles/s — writes are heavier
+    concurrency_levels: [1, 4, 8, 16, 32]
+    rate_levels: [10, 25, 50, 100]
 slo:
-  p99_ms: 500                      # reads
-  per_scenario:
-    ingest: { p99_ms: 1000 }       # transaction-bundle writes are heavier
+  p99_ms: 500
+  per_scenario: { ingest: { p99_ms: 1000 } }
 ```
 
-Ladders are log-spaced and extend past where a 4-vCPU server saturates so the knee is
+Ladders are log-spaced and reach past where a 4-vCPU server saturates so the knee is
 bracketed. **Two-phase refinement:** run the coarse ladder, see where the knee falls,
-then a cheap second pass with `RATE_LEVELS` set to a few rates bracketing it
-(e.g. `RATE_LEVELS="2000 2400 2800"`). Env overrides for iteration/smoke:
-`RATE_LEVELS="50 200"` truncates the ladder for all scenarios; `REPS`, `WARMUP_S`,
-`MEASURE_S`, `COOLDOWN_S` size the windows; `SCENARIOS` selects workloads. A single
-standalone level: `RATE=400 scenarios/run.sh read-mix http://localhost:9090/fhir/r4 60s`.
+then a cheap second pass bracketing it via `CONCURRENCY_LEVELS="48 64 96"` (closed) or
+`RATE_LEVELS="500 650 800"` (open). Env overrides: `LOAD_MODEL`, `CONCURRENCY_LEVELS` /
+`RATE_LEVELS` (truncate the ladder for all scenarios), `REPS`, `WARMUP_S`, `MEASURE_S`,
+`COOLDOWN_S`, `SCENARIOS`. Standalone single level:
+`CONCURRENCY=32 scenarios/run.sh read-mix http://localhost:9090/fhir/r4 60s`
+(or `LOAD_MODEL=open RATE=400 …`).
 
 ## Output layout
 
 ```
-results/<server>/<workload>/rep-<r>/rate-<R>/summary.json   # one k6 summary per level
-results/<server>/run-manifest.json                          # ladders, windows, SLO, provenance
-results/report.md, report.csv                               # latency-vs-rate curves + headline
+results/<server>/<workload>/rep-<r>/<c-N|rate-R>/summary.json   # one k6 summary per level
+results/<server>/run-manifest.json                              # load_model, ladders, windows, SLO
+results/report.md, report.csv                                   # model-appropriate curves + headline
 ```
+
+`report.py` reads `load_model` from the manifest and renders the matching report
+(throughput-vs-concurrency for closed, latency-vs-rate for open).
 
 ## Cost note
 
 A sweep multiplies wall-clock: `levels × reps × (warmup + measure + cooldown)` per
-workload per server. Trim via shorter `measure_s` (steady-state percentiles settle
-well before 600 s), a coarser ladder, or fewer reps for iteration; use the full ladder
-for headline runs. The report logs which levels ran so a truncated ladder is never
-mistaken for full coverage.
+workload per server. Trim via shorter `measure_s` (steady-state percentiles settle well
+before 600 s), a coarser ladder, or fewer reps for iteration; use the full ladder for
+headline runs. The report logs which levels ran so a truncated ladder is never mistaken
+for full coverage.

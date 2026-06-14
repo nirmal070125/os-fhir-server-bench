@@ -120,26 +120,32 @@ servers:
     health_path: /health
 
 run:
+  # Load model — how load is applied (see docs/load-model.md):
+  #   closed (default): N concurrent clients (VUs), each looping send->reply->send. The
+  #                     field-standard "N users" shape; directly comparable to published
+  #                     FHIR benchmarks. Sweeps workload.*.concurrency_levels.
+  #   open:             a fixed offered req/s on a clock; coordinated-omission-free tails.
+  #                     Sweeps workload.*.rate_levels. Override with LOAD_MODEL=open.
+  load_model: closed
   warmup_s: 90                           # discarded — warms JIT/page cache/pools
-  measure_s: 600                         # the only data that counts (per rate level)
+  measure_s: 600                         # the only data that counts (per level)
   cooldown_s: 60
   repetitions: 3                         # report median + spread
-  scenarios: [read-mix, ingest]          # closed-model concurrency sweeps (see docs/load-model.md)
+  scenarios: [read-mix, ingest]
 
-# Open model — the OFFERED RATE (req/s k6 issues on a clock, NOT VU count) is the
-# swept variable; the server either keeps up (achieved ≈ offered, latency flat) or
-# falls behind (latency climbs). We run one rate per measurement window and step
-# through the ladder, so the latency-vs-rate curve shows where each server's knee is.
-# Arrival rate (not VU count) drives load so coordinated omission can't hide tail
-# latency; run.sh sizes the VU pool from the rate and report.py flags any level that
-# dropped iterations (offered rate not delivered). Ladders are log-spaced and extend
-# past where a 4-vCPU server saturates so the knee is bracketed. Override for
-# smoke/iteration with RATE_LEVELS="50 200" (applies to all scenarios).
+# Per-workload load ladders (one level per measurement window; the orchestrator steps
+# through them, so the curve shows where each server's knee is). The active ladder
+# depends on run.load_model: closed -> concurrency_levels (# of clients); open ->
+# rate_levels (req/s offered). Ladders are log-spaced and reach past where a 4-vCPU
+# server saturates so the knee is bracketed. Override for smoke/iteration with
+# CONCURRENCY_LEVELS="1 8 32" (closed) or RATE_LEVELS="50 200" (open).
 workload:
   read-mix:                # read-dominated real-world traffic; read-only (state shared across the sweep)
-    rate_levels: [50, 100, 200, 400]                    # req/s offered
+    concurrency_levels: [1, 8, 32, 64, 128, 256]        # closed: concurrent clients (VUs)
+    rate_levels: [50, 100, 200, 400]                    # open: req/s offered
   ingest:                  # transaction-bundle writes (PR #165); snapshot restored before each level
-    rate_levels: [10, 25, 50, 100]                      # bundles/s — writes are heavier → lower ceiling
+    concurrency_levels: [1, 4, 8, 16, 32]               # closed: writes are heavier → lower ceiling
+    rate_levels: [10, 25, 50, 100]                       # open: bundles/s offered
 
 # SLO line for the headline "max sustainable throughput" — the highest offered rate
 # the server keeps up with (achieved ≈ offered, no dropped iterations) while p99 < SLO

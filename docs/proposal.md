@@ -142,14 +142,17 @@ omission** — the #1 way naive benchmarks lie about tail latency. Tool: **k6**
 (`constant-arrival-rate` executor) — scriptable in JS, native headless, native percentile
 output, first-class Prometheus/InfluxDB push for centralized reporting.
 
-> **Refined — see [`load-model.md`](load-model.md).** The implemented benchmark keeps this
-> open model but replaces the original single fixed rate per scenario (and the separate
-> ramping `saturation` scenario) with a **stepped offered-rate sweep**: each rate level is
-> a discrete `constant-arrival-rate` run measured to steady state, so we get a clean
-> per-level latency-vs-rate curve (the sweep *is* the saturation curve) and derive max
-> sustainable throughput as the highest rate meeting the SLO. The harness also sizes the
-> VU pool from the rate and flags `dropped_iterations`, so the load generator's ceiling is
-> never mistaken for the server's.
+> **Refined — see [`load-model.md`](load-model.md).** The implemented benchmark supports
+> **both** models via `run.load_model`, and **defaults to closed** (`constant-vus`, a
+> concurrency sweep) — the field-standard "N concurrent users" shape, which keeps our
+> numbers comparable to published FHIR-server benchmarks and is internally fair since we
+> run every server through the same harness. The **open** model above remains available
+> (`LOAD_MODEL=open`) for coordinated-omission-free tail latency. Either way it's a
+> *stepped sweep* (one level per measured window — the sweep *is* the saturation curve),
+> not a single fixed point, and the separate ramping `saturation` scenario is gone. Under
+> closed model we headline throughput (CO-immune) and treat near-saturation tails as
+> indicative; under open we size the VU pool from the rate and flag `dropped_iterations`
+> so the load generator's ceiling is never mistaken for the server's.
 
 **Isolation rules:**
 - Load generator on a **separate host** from the SUT (otherwise you measure the generator's

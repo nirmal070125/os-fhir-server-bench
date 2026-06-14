@@ -5,7 +5,7 @@ A **fair, fully reproducible** performance benchmark of open-source FHIR servers
 It measures [`fhir-server-go`](https://github.com/wso2/open-healthcare-prebuilt-services)
 against the well-known open-source FHIR servers (HAPI, Microsoft, IBM/LinuxForHealth,
 Medplum, Blaze) under identical hardware, an identical dataset, and a standards-compliant
-methodology (warm-up, steady-state, open-model load, N repetitions). Every server is hit
+methodology (warm-up, steady-state, a closed- or open-model load sweep, N repetitions). Every server is hit
 **only through its public FHIR REST API** — no privileged shortcuts for anyone.
 
 > Anyone can reproduce the results on their own Azure subscription by editing one config
@@ -80,8 +80,8 @@ dataset size + seed, which servers are enabled, run timings, SLOs). Secrets live
 | `infra/` | Terraform (`azurerm`): VMs, network, storage, cloud-init |
 | `dataset/` | Synthea generation + per-engine snapshot/restore |
 | `servers/` | One dir per server: docker-compose, pinned versions, tuned config |
-| `scenarios/` | k6 load scripts (read-mix, ingest) — open-model offered-rate sweep ([docs/load-model.md](docs/load-model.md)) |
-| `orchestrator/` | The run driver (reset → warm-up → sweep offered rate → collect) |
+| `scenarios/` | k6 load scripts (read-mix, ingest) — closed-model (default) or open-model load sweep ([docs/load-model.md](docs/load-model.md)) |
+| `orchestrator/` | The run driver (reset → warm-up → sweep the load ladder → collect) |
 | `reporting/` | Grafana dashboards + report generator |
 | `ci/` | GitHub Actions (manual dispatch + scheduled) |
 | `bin/` | Helper scripts (`cfg`, `preflight.sh`) |
@@ -89,9 +89,9 @@ dataset size + seed, which servers are enabled, run timings, SLOs). Secrets live
 ## Status
 
 The full pipeline is implemented and CI-validated: infra (Terraform), dataset
-(Synthea + per-engine snapshot/restore), k6 scenarios (open-model offered-rate
+(Synthea + per-engine snapshot/restore), k6 scenarios (closed- or open-model load
 sweep), orchestrator
-(restore → warm-up → sweep offered rate ×N → run manifest), reporting (report generator +
+(restore → warm-up → sweep the load ladder ×N → run manifest), reporting (report generator +
 Prometheus/Grafana + Blob upload), and GitHub Actions (validate / smoke / azure-run).
 
 Server profiles:
