@@ -14,6 +14,11 @@ azure:
     loadgen: Standard_D8s_v5             # load generator — must out-class the SUT
     obs: Standard_D4s_v5                 # Prometheus + Grafana (4 vCPU / 16 GB)
   spot_enabled: true                     # obs only on Spot (cheap); SUT + loadgen always Regular (loadgen runs the controller — a Spot eviction would silently kill the run)
+  # Parallel mode (`make benchmark-parallel`): provision a SECOND isolated SUT+loadgen
+  # stack, pinned to a DIFFERENT availability zone so the two SUTs never share a physical
+  # host — two servers benchmark concurrently on separate hardware (≈ identical to running
+  # them one after another, in ~half the wall-clock). false = single stack (sequential).
+  parallel_stacks: false
   auto_shutdown:                         # DAILY fixed-time shutdown — DISABLED.
     enabled: false                       # a clock timer can't tell a run is in flight: the
     time: "2000"                         # 2000 UTC timer deallocated all VMs ~13 min into a

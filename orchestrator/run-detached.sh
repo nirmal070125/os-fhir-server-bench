@@ -20,11 +20,16 @@ KEY_PUB="$(cfg azure.ssh_public_key_path)"; KEY_PUB="${KEY_PUB/#\~/$HOME}"; KEY=
 [[ -f "$KEY" ]] || { echo "private key not found: $KEY"; exit 1; }
 OPTS="-i $KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR"
 
+# STACK selects which (loadgen, SUT) pair to drive: 1 = base stack (sut/loadgen),
+# 2 = the parallel stack (sut2/loadgen2, a different availability zone). Default 1.
+STACK="${STACK:-1}"
+if [[ "$STACK" == "2" ]]; then SUT_KEY="sut2"; LOADGEN_KEY="loadgen2"; else SUT_KEY="sut"; LOADGEN_KEY="loadgen"; fi
 out="$(cd infra && terraform output -json)"
-sut_ip="$(echo "$out" | yq -r '.public_ips.value.sut')"
-loadgen_ip="$(echo "$out" | yq -r '.public_ips.value.loadgen')"
-sut_priv="$(echo "$out" | yq -r '.private_ips.value.sut')"
-[[ -n "$sut_ip" && -n "$loadgen_ip" && -n "$sut_priv" ]] || { echo "missing Terraform outputs (is infra up?)"; exit 1; }
+sut_ip="$(echo "$out" | yq -r ".public_ips.value.$SUT_KEY")"
+loadgen_ip="$(echo "$out" | yq -r ".public_ips.value.$LOADGEN_KEY")"
+sut_priv="$(echo "$out" | yq -r ".private_ips.value.$SUT_KEY")"
+[[ -n "$sut_ip" && -n "$loadgen_ip" && -n "$sut_priv" && "$sut_ip" != "null" ]] \
+  || { echo "missing Terraform outputs for stack $STACK ($SUT_KEY/$LOADGEN_KEY) — is infra up with parallel_stacks enabled?"; exit 1; }
 REPO="/home/$USER/os-fhir-server-bench"
 
 wait_ssh() { echo "==> waiting for ssh+cloud-init: $1"; local up=0
@@ -76,7 +81,7 @@ ssh $OPTS "$USER@$loadgen_ip" "chmod 600 ~/.ssh/bench_ctrl && (command -v tmux >
 # can't be set up, the run still keeps the report on the VM (use `make report`).
 acct="$(echo "$out" | yq -r '.storage_account.value // ""')"
 container="$(echo "$out" | yq -r '.blob_container.value // ""')"
-prefix="run-$(date -u '+%Y%m%d-%H%M%S')"
+prefix="${RUN_PREFIX:-run-$(date -u '+%Y%m%d-%H%M%S')}-s${STACK}"
 upload_url=""; report_view=""
 if [[ -n "$acct" && -n "$container" ]] && command -v az >/dev/null 2>&1; then
   key="$(az storage account keys list -g "$(cfg azure.resource_group)" -n "$acct" --query '[0].value' -o tsv 2>/dev/null || true)"
@@ -134,7 +139,7 @@ exports="export REMOTE=1 LOADGEN_LOCAL=1 SUT_SSH='$USER@$sut_priv' SUT_REPO='$RE
 export SSH_OPTS='-i /home/$USER/.ssh/bench_ctrl -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'"
 [[ -n "$cache_sas" ]] && exports+="
 export BENCH_CACHE_SAS='$cache_sas'"
-for v in SIZE REPS WARMUP_S MEASURE_S COOLDOWN_S SCENARIOS SEED_CONCURRENCY \
+for v in SIZE REPS WARMUP_S MEASURE_S COOLDOWN_S SCENARIOS SERVERS SEED_CONCURRENCY \
          LOAD_MODEL CONCURRENCY_LEVELS RATE_LEVELS; do
   [[ -n "${!v:-}" ]] && exports+="
 export $v='${!v}'"
@@ -174,14 +179,20 @@ rm -f "$launch"
 echo "==> launching controller in tmux 'bench' on the loadgen"
 ssh $OPTS "$USER@$loadgen_ip" "chmod +x '$REPO/.detached-run.sh' && tmux new-session -d -s bench \"bash '$REPO/.detached-run.sh'\""
 
-cat > "$ROOT/.detached.env" <<EOF
+# Per-stack env file (.detached.s<STACK>.env) so two parallel stacks don't clobber each
+# other; stack 1 also writes .detached.env so plain `make status/stop/report` keep working.
+write_env() { cat > "$1" <<EOF
 ADMIN=$USER
 LOADGEN_IP=$loadgen_ip
 SUT_IP=$sut_ip
 REPO=$REPO
 PREFIX=$prefix
+STACK=$STACK
 SSH_OPTS="$OPTS"
 EOF
+}
+write_env "$ROOT/.detached.s${STACK}.env"
+[[ "$STACK" == "1" ]] && write_env "$ROOT/.detached.env" || true
 
 cat <<EOF
 
