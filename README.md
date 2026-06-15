@@ -31,16 +31,19 @@ Always confirm in the Azure Portal that everything was deallocated when you are 
 ## How it works
 
 ```
-┌─────────────────┐  HTTP   ┌──────────────────────────────┐
-│ Load Generator  │────────▶│  SUT host (one server at a    │
-│ (k6, headless)  │         │  time, fixed CPU/mem limits)  │
-└────────┬────────┘         │   ├─ FHIR server container    │
-         │ metrics          │   └─ DB container (snapshot)  │
-         ▼                  └───────────────┬──────────────┘
-┌──────────────────────────────────────────▼─────────────┐
-│ Observability + results: Prometheus + Grafana,          │
-│ raw JSON + reports → Azure Blob                         │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────┐     HTTP       ┌──────────────────────────────────────────┐
+│ Load generator   │───────────────▶│ SUT host — one server at a time,         │
+│ (k6, headless)   │                │ fixed CPU / mem limits:                  │
+└────────┬─────────┘                │   ├─ FHIR server container               │
+         │                          │   └─ DB container (from snapshot)        │
+         │                          └───────────────────┬──────────────────────┘
+metrics  │                                              │
+         │                                              │ results
+         │                                              │
+┌────────┴──────────────────────────────────────────────┴──────────────────────┐
+│ Observability & results: Prometheus + Grafana;                               │
+│ raw k6 JSON + generated reports  →  Azure Blob                               │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 See [`docs/proposal.md`](docs/proposal.md) for the full methodology, fairness charter, and
