@@ -19,14 +19,17 @@ dataset/snapshots/
 
 # Run artifacts (uploaded to Blob; not tracked)
 results/
+results-blob/
 *.log
 
 # Synthea jar (174MB — generate.sh downloads the pinned version)
 dataset/*.jar
 
-# Remote-run wiring (generated from Terraform outputs)
+# Remote-run wiring (generated from Terraform outputs).
+# .detached*.env hold real VM public IPs (LOADGEN_IP/SUT_IP) — never commit them.
+# The glob covers the sequential .detached.env AND parallel .detached.s1.env/.s2.env.
 .remote.env
-.detached.env
+.detached*.env
 
 # Python bytecode cache
 __pycache__/

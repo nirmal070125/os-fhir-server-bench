@@ -35,6 +35,10 @@ azure:
   admin_username: benchadmin
   ssh_public_key_path: ~/.ssh/id_rsa.pub
   # SECURITY: lock SSH to your IP. Set to "<your.ip>/32"; leaving 0.0.0.0/0 opens SSH to the world.
+  # `make provision` runs bin/lock-ssh-ip.sh, which rewrites THIS line in place with your
+  # current public IP. That means after a provision your real IP sits in this tracked file —
+  # do NOT `git commit` bench.config.yaml with your IP in it; revert this line to 0.0.0.0/0
+  # (the shipped default) before committing.
   allowed_ssh_cidr: 0.0.0.0/0
 
 # Identical container resource envelope applied to EVERY server under test —

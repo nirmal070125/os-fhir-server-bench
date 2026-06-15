@@ -11,6 +11,23 @@ methodology (warm-up, steady-state, a closed- or open-model load sweep, N repeti
 > Anyone can reproduce the results on their own Azure subscription by editing one config
 > file and running one command. Nothing runs by hand; nothing is hard-coded.
 
+## ⚠️ Disclaimer
+
+**This tool provisions paid cloud infrastructure on _your_ Azure subscription and you are
+solely responsible for all charges it incurs.** A run creates multiple VMs, disks, storage,
+and networking; if they are left running or are not torn down, billing continues. Costs vary
+by region, VM availability, dataset size, and how long resources stay up — the figures in this
+README are rough estimates, not guarantees.
+
+The authors and contributors **cannot be held responsible for any financial cost, billing
+overrun, data loss, security exposure, or other damages** arising from using this tool. You
+are responsible for: monitoring your own spend, tearing down resources (`make teardown`),
+securing access (set `allowed_ssh_cidr` to your IP — never leave `0.0.0.0/0`), and protecting
+your credentials. The software is provided **"AS IS", without warranty of any kind** — see
+[`LICENSE`](LICENSE) (Apache-2.0).
+
+Always confirm in the Azure Portal that everything was deallocated when you are done.
+
 ## How it works
 
 ```
@@ -98,8 +115,10 @@ Server profiles:
 
 | Server | Status |
 |---|---|
-| fhir-server-go, HAPI, Blaze | ✅ boot-verified end-to-end |
+| fhir-server-go, HAPI | ✅ **benchmarked end-to-end** — completed a `medium1y` (10k patients) closed-model head-to-head |
+| Blaze | ✅ boot-verified end-to-end |
 | Microsoft, Medplum, IBM | ⚠️ scaffolded — finalize per each `servers/<name>/README.md` (shared blocker: an optional auth header for seed/scenarios) |
 
-Next milestones: **Phase-0 Medium run** (fhir-server-go only) on Azure, then the
-**Large (100k) all-six headline run** once the three scaffolded profiles are finalized.
+Next milestones: bring Blaze and the three scaffolded profiles into the sweep, then the
+**Large (100k) all-comparators headline run**. Adding a server is a self-contained,
+contract-driven task — see [`servers/README.md`](servers/README.md#adding-a-new-server).
