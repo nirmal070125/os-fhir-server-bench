@@ -20,10 +20,11 @@ KEY_PUB="$(cfg azure.ssh_public_key_path)"; KEY_PUB="${KEY_PUB/#\~/$HOME}"; KEY=
 [[ -f "$KEY" ]] || { echo "private key not found: $KEY"; exit 1; }
 OPTS="-i $KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR"
 
-# STACK selects which (loadgen, SUT) pair to drive: 1 = base stack (sut/loadgen),
-# 2 = the parallel stack (sut2/loadgen2, a different availability zone). Default 1.
+# STACK selects which lane (loadgen+SUT pair) to drive: 1 = the (only) stack in
+# single-stack mode; in parallel mode 1..N index the per-server lanes, each in its own
+# availability zone (round-robin). Lanes are uniformly named sut<i>/loadgen<i>. Default 1.
 STACK="${STACK:-1}"
-if [[ "$STACK" == "2" ]]; then SUT_KEY="sut2"; LOADGEN_KEY="loadgen2"; else SUT_KEY="sut"; LOADGEN_KEY="loadgen"; fi
+SUT_KEY="sut${STACK}"; LOADGEN_KEY="loadgen${STACK}"
 out="$(cd infra && terraform output -json)"
 sut_ip="$(echo "$out" | yq -r ".public_ips.value.$SUT_KEY")"
 loadgen_ip="$(echo "$out" | yq -r ".public_ips.value.$LOADGEN_KEY")"
@@ -128,13 +129,21 @@ stop_line=":"
 if [[ "$(cfg azure.auto_stop_when_done 2>/dev/null)" == "true" ]]; then
   stop_vms_env=""
   if [[ "$(cfg azure.parallel_stacks 2>/dev/null)" == "true" ]]; then
-    # Parallel: this stack deallocates ONLY its own SUT+loadgen — never the other
-    # stack's VMs. The shared monitoring-only obs is deallocated by self-stop ONLY when
-    # this is the last stack to finish (all PEER VMs already down), so the still-running
-    # stack keeps its monitoring. VM names match infra name_prefix "fhirbench".
-    if [[ "$STACK" == "2" ]]; then peer_sut="sut"; peer_loadgen="loadgen"; else peer_sut="sut2"; peer_loadgen="loadgen2"; fi
-    stop_vms_env="BENCH_STOP_VMS='fhirbench-$SUT_KEY fhirbench-$LOADGEN_KEY' BENCH_SHARED_VMS='fhirbench-obs' BENCH_PEER_VMS='fhirbench-$peer_sut fhirbench-$peer_loadgen' "
-    echo "==> auto-stop ON (parallel): this stack frees its own VMs (sut=$SUT_KEY, loadgen=$LOADGEN_KEY); obs only when the other stack is also done"
+    # Parallel: this lane deallocates ONLY its own SUT+loadgen — never another lane's
+    # VMs. The shared monitoring-only obs is deallocated by self-stop ONLY when this is
+    # the LAST lane to finish (every PEER VM already down), so a still-running lane keeps
+    # its monitoring. Peers = every OTHER sut<j>/loadgen<j> lane, discovered from the live
+    # Terraform outputs (the source of truth for how many lanes exist) so this works for
+    # any N. VM names match infra name_prefix "fhirbench".
+    peer_vms=""
+    while IFS= read -r _k; do
+      [[ "$_k" =~ ^sut([0-9]+)$ ]] || continue
+      _j="${BASH_REMATCH[1]}"; [[ "$_j" == "$STACK" ]] && continue
+      peer_vms+="fhirbench-sut${_j} fhirbench-loadgen${_j} "
+    done < <(echo "$out" | yq -r '.public_ips.value | keys | .[]')
+    peer_vms="${peer_vms% }"
+    stop_vms_env="BENCH_STOP_VMS='fhirbench-$SUT_KEY fhirbench-$LOADGEN_KEY' BENCH_SHARED_VMS='fhirbench-obs' BENCH_PEER_VMS='$peer_vms' "
+    echo "==> auto-stop ON (parallel): this lane frees its own VMs (sut=$SUT_KEY, loadgen=$LOADGEN_KEY); shared obs only once all peer lanes are down"
   else
     echo "==> auto-stop ON: all VMs will deallocate after the report uploads"
   fi

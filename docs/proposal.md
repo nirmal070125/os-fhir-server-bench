@@ -159,7 +159,12 @@ output, first-class Prometheus/InfluxDB push for centralized reporting.
   CPU contention).
 - Pin SUT + DB to fixed CPU/memory via container limits (cgroups). Same limits for all.
 - Quiet, dedicated network; record round-trip baseline ping.
-- One SUT live at a time; everything else stopped.
+- One SUT live at a time per host; everything else stopped. (Parallel mode runs several
+  servers at once, but each on its **own** SUT+loadgen lane — never two SUTs on one host.
+  Lanes are pinned to availability zones round-robin over [1,2,3]; with ≤ 3 lanes each gets
+  a distinct zone, so SUTs never share a physical host. Beyond 3 lanes some share a zone —
+  still separate VMs, but Azure doesn't guarantee distinct hosts within a zone, so the
+  strict-isolation **headline** run uses sequential or ≤ 3 parallel lanes.)
 - Same OS, kernel, Docker version across runs.
 
 **Statistical hygiene:** record exact versions, configs, dataset hash, and host specs in

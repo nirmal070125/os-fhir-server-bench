@@ -16,10 +16,13 @@ KEY="${KEY_PUB%.pub}"
 [[ -f "$KEY" ]] || { echo "private key not found: $KEY (pair of $KEY_PUB)"; exit 1; }
 SSH_OPTS="-i $KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR"
 
+# Lanes are uniformly named sut<i>/loadgen<i>; this operator-driven path targets one
+# lane (STACK, default 1 — the only lane in single-stack mode).
+STACK="${STACK:-1}"
 out="$(cd infra && terraform output -json)"
-sut_ip="$(echo "$out"     | yq -r '.public_ips.value.sut')"
-loadgen_ip="$(echo "$out" | yq -r '.public_ips.value.loadgen')"
-sut_priv="$(echo "$out"   | yq -r '.private_ips.value.sut')"
+sut_ip="$(echo "$out"     | yq -r ".public_ips.value.sut${STACK}")"
+loadgen_ip="$(echo "$out" | yq -r ".public_ips.value.loadgen${STACK}")"
+sut_priv="$(echo "$out"   | yq -r ".private_ips.value.sut${STACK}")"
 [[ -n "$sut_ip" && -n "$loadgen_ip" && -n "$sut_priv" ]] || { echo "missing Terraform outputs (is infra up?)"; exit 1; }
 REPO_DIR="/home/$USER/os-fhir-server-bench"
 

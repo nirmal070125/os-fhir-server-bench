@@ -53,7 +53,10 @@ metric definitions.
 
 **Accounts / cloud**
 - An **Azure subscription** with **≥ ~20 vCPU quota** for the `Dsv5` family in your region
-  (the reference run uses 3 VMs ≈ 20 vCPUs).
+  (the reference run uses 3 VMs ≈ 20 vCPUs). **Parallel mode** (`make benchmark-parallel`)
+  provisions one SUT+loadgen lane per enabled server, so quota scales with it: each lane
+  ≈ 16 vCPU + the shared 4-vCPU obs (e.g. all 6 servers ≈ 100 vCPU). Requires a
+  zone-enabled region.
 - An **Azure service principal** with **Contributor** on the target subscription/RG.
 
 **On your machine** (to *drive* the run — not to run the servers)
