@@ -80,6 +80,16 @@ resource "azurerm_role_assignment" "loadgen_self_stop" {
   principal_id         = azurerm_linux_virtual_machine.vm["loadgen"].identity[0].principal_id
 }
 
+
+# Parallel mode: stack 2's loadgen2 runs its own self-stop.sh, so it needs the
+# same VM-deallocate role. Gated on parallel + auto-stop. Without this the second
+# stack (e.g. HAPI) would never auto-stop and would bill until a manual stop.
+resource "azurerm_role_assignment" "loadgen2_self_stop" {
+  count                = (try(local.cfg.azure.auto_stop_when_done, false) && try(local.cfg.azure.parallel_stacks, false)) ? 1 : 0
+  scope                = azurerm_resource_group.rg.id
+  role_definition_name = "Virtual Machine Contributor"
+  principal_id         = azurerm_linux_virtual_machine.vm["loadgen2"].identity[0].principal_id
+}
 # Auto-shutdown backstop so forgotten VMs don't quietly bill at ~$1/hr.
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "shutdown" {
   for_each           = local.cfg.azure.auto_shutdown.enabled ? local.nodes : {}
