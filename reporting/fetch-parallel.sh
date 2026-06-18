@@ -14,18 +14,20 @@ ACCT="$(cd infra && terraform output -raw storage_account 2>/dev/null || true)"
 CONT="$(bin/cfg reporting.blob_container)"
 KEY="$(az storage account keys list -g "$(bin/cfg azure.resource_group)" -n "$ACCT" --query '[0].value' -o tsv)"
 
-# Prefixes from args, else from the per-stack detached env files.
+# Prefixes from args, else from EVERY per-lane detached env file (.detached.s<i>.env),
+# so this discovers all lanes regardless of how many there are.
 prefixes=("$@")
 if [[ ${#prefixes[@]} -eq 0 ]]; then
-  for s in 1 2; do
-    p="$(grep -E '^PREFIX=' ".detached.s$s.env" 2>/dev/null | cut -d= -f2 || true)"
+  shopt -s nullglob
+  for envf in .detached.s*.env; do
+    p="$(grep -E '^PREFIX=' "$envf" 2>/dev/null | cut -d= -f2 || true)"
     [[ -n "$p" ]] && prefixes+=("$p")
   done
 fi
-[[ ${#prefixes[@]} -ge 1 ]] || { echo "no stack prefixes (.detached.s1.env/.s2.env missing) — pass them as args"; exit 1; }
+[[ ${#prefixes[@]} -ge 1 ]] || { echo "no lane prefixes (.detached.s*.env missing) — pass them as args"; exit 1; }
 
-# Each stack's blobs live under <prefix>/<server>/... ; download and merge the server
-# trees into results/<server>/... so report.py sees both servers at once.
+# Each lane's blobs live under <prefix>/<server>/... ; download and merge the server
+# trees into results/<server>/... so report.py sees every server at once.
 staging="results-blob/_parallel"; rm -rf "$staging"; mkdir -p "$staging" results
 for p in "${prefixes[@]}"; do
   echo "==> fetching $p from Blob"

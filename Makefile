@@ -17,8 +17,8 @@ smoke: provision ## Quick validation run (small data, 1 rep, short windows, trun
 	   CONCURRENCY_LEVELS="1 8 32" \
 	   orchestrator/run-detached.sh
 
-smoke-parallel: provision ## Quick PARALLEL validation: both stacks, small data, short windows (needs azure.parallel_stacks=true)
-	@echo "==> smoke-parallel: small / 1 rep / 15s+30s / 2 stacks (z1+z2) — both load models truncated"
+smoke-parallel: provision ## Quick PARALLEL validation: one lane per enabled server, small data, short windows (needs azure.parallel_stacks=true)
+	@echo "==> smoke-parallel: small / 1 rep / 15s+30s / one lane per enabled server (zone round-robin) — both load models truncated"
 	@SIZE=small REPS=1 WARMUP_S=15 MEASURE_S=30 \
 	   RATE_LEVELS="50 200" CONCURRENCY_LEVELS="1 8" \
 	   orchestrator/run-parallel.sh
@@ -26,15 +26,15 @@ smoke-parallel: provision ## Quick PARALLEL validation: both stacks, small data,
 benchmark: provision ## The full run (bench.config.yaml: size, reps, windows, full ramp) — detached
 	@orchestrator/run-detached.sh
 
-benchmark-parallel: provision ## Two servers concurrently on separate AZs (needs azure.parallel_stacks=true) — detached
+benchmark-parallel: provision ## All enabled servers concurrently, one lane each on separate AZs (needs azure.parallel_stacks=true) — detached
 	@orchestrator/run-parallel.sh
 
-status: ## Show the in-flight run's progress (log tail / DONE). STACK=2 for the parallel 2nd stack.
+status: ## Show the in-flight run's progress (log tail / DONE). STACK=<i> for a parallel lane (1..N).
 	@set -a; . ./.detached$(if $(STACK),.s$(STACK)).env 2>/dev/null; set +a; \
 	  ssh $$SSH_OPTS $$ADMIN@$$LOADGEN_IP "if [ -f $$REPO/run.done ]; then echo \"== DONE (exit \$$(cat $$REPO/run.exit))\"; fi; tail -n 20 $$REPO/run.log" 2>/dev/null \
 	  || echo "no detached run found (.detached.env missing — run 'make smoke' or 'make benchmark')"
 
-stop: ## Stop the in-flight detached run (controller + workers, verified); STACK=2 for the 2nd stack; DEALLOCATE=1 also halts VM billing
+stop: ## Stop the in-flight detached run (controller + workers, verified); STACK=<i> for a parallel lane; DEALLOCATE=1 also halts VM billing
 	@set -a; . ./.detached$(if $(STACK),.s$(STACK)).env 2>/dev/null; set +a; \
 	  if [ -z "$${LOADGEN_IP:-}" ]; then echo "no detached run found (.detached.env missing)"; \
 	  else \
@@ -55,7 +55,7 @@ stop: ## Stop the in-flight detached run (controller + workers, verified); STACK
 report: ## Show the latest run's report + run log from Blob (works after auto-stop; pass a run-… prefix to pick one)
 	@bin/fetch-report.sh $(RUN)
 
-report-parallel: ## Build ONE head-to-head report from both parallel stacks' results in Blob (works even after auto-stop)
+report-parallel: ## Build ONE head-to-head report from ALL parallel lanes' results in Blob (works even after auto-stop)
 	@reporting/fetch-parallel.sh $(RUN)
 
 clean-blob: ## Delete ALL run results from the Blob container (start fresh)

@@ -14,10 +14,18 @@ azure:
     loadgen: Standard_D8s_v5             # load generator — must out-class the SUT
     obs: Standard_D4s_v5                 # Prometheus + Grafana (4 vCPU / 16 GB)
   spot_enabled: true                     # obs only on Spot (cheap); SUT + loadgen always Regular (loadgen runs the controller — a Spot eviction would silently kill the run)
-  # Parallel mode (`make benchmark-parallel`): provision a SECOND isolated SUT+loadgen
-  # stack, pinned to a DIFFERENT availability zone so the two SUTs never share a physical
-  # host — two servers benchmark concurrently on separate hardware (≈ identical to running
-  # them one after another, in ~half the wall-clock). false = single stack (sequential).
+  # Parallel mode (`make benchmark-parallel`): provision ONE isolated SUT+loadgen lane
+  # PER ENABLED SERVER (count derived from servers.*.enabled — nothing to set), each
+  # pinned to an availability zone round-robin over [1,2,3] so co-located lanes spread
+  # across zones. Every server then benchmarks concurrently on separate hardware
+  # (≈ identical to running them one after another, in a fraction of the wall-clock).
+  #   false = single stack (sequential, the default).
+  #   true  = N concurrent lanes, N = number of enabled servers.
+  # NOTE: cost/quota scale with N — each lane ≈ 16 vCPU (SUT 8 + loadgen 8) + the shared
+  # 4-vCPU obs (e.g. 6 servers ≈ 100 vCPU). Requires a zone-enabled Azure region. Beyond
+  # 3 lanes some share a zone (still separate VMs, but distinct physical hosts aren't
+  # guaranteed within a zone) — keep N ≤ 3 or run sequentially for the strict-isolation
+  # headline run. To run fewer servers in parallel, just disable some here.
   parallel_stacks: false
   auto_shutdown:                         # DAILY fixed-time shutdown — DISABLED.
     enabled: false                       # a clock timer can't tell a run is in flight: the

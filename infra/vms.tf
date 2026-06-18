@@ -70,25 +70,17 @@ resource "azurerm_linux_virtual_machine" "vm" {
   ))
 }
 
-# Auto-stop-when-done: let the loadgen's managed identity deallocate VMs in this RG
-# (the detached run calls self-stop.sh after uploading the report). Gated by the
-# config flag because creating a role assignment requires Owner/User-Access-Admin.
+# Auto-stop-when-done: let EACH lane's loadgen managed identity deallocate VMs in this
+# RG (its detached run calls self-stop.sh after uploading the report — and in parallel
+# mode each lane frees only its own SUT+loadgen, plus the shared obs when it's last).
+# Gated by the config flag because creating a role assignment requires
+# Owner/User-Access-Admin. One assignment per loadgen lane (loadgen1..N); single-stack
+# mode has exactly loadgen1.
 resource "azurerm_role_assignment" "loadgen_self_stop" {
-  count                = try(local.cfg.azure.auto_stop_when_done, false) ? 1 : 0
+  for_each             = try(local.cfg.azure.auto_stop_when_done, false) ? toset([for i in range(1, local.stack_count + 1) : "loadgen${i}"]) : toset([])
   scope                = azurerm_resource_group.rg.id
   role_definition_name = "Virtual Machine Contributor"
-  principal_id         = azurerm_linux_virtual_machine.vm["loadgen"].identity[0].principal_id
-}
-
-
-# Parallel mode: stack 2's loadgen2 runs its own self-stop.sh, so it needs the
-# same VM-deallocate role. Gated on parallel + auto-stop. Without this the second
-# stack (e.g. HAPI) would never auto-stop and would bill until a manual stop.
-resource "azurerm_role_assignment" "loadgen2_self_stop" {
-  count                = (try(local.cfg.azure.auto_stop_when_done, false) && try(local.cfg.azure.parallel_stacks, false)) ? 1 : 0
-  scope                = azurerm_resource_group.rg.id
-  role_definition_name = "Virtual Machine Contributor"
-  principal_id         = azurerm_linux_virtual_machine.vm["loadgen2"].identity[0].principal_id
+  principal_id         = azurerm_linux_virtual_machine.vm[each.key].identity[0].principal_id
 }
 # Auto-shutdown backstop so forgotten VMs don't quietly bill at ~$1/hr.
 resource "azurerm_dev_test_global_vm_shutdown_schedule" "shutdown" {
